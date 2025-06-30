@@ -316,6 +316,186 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
     
     return land_millage, improvement_millage, new_total_revenue, result_df
 
+def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
+                                 current_revenue: float, abatement_percentage: float = 1.0,
+                                 exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
+                                 percentage_cap_col: Optional[str] = None) -> Tuple[float, float, pd.DataFrame]:
+    """
+    Model a building abatement system where improvements are reduced by a specified percentage.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing property data
+    land_value_col : str
+        Column name for land value
+    improvement_value_col : str
+        Column name for improvement/building value
+    current_revenue : float
+        Current tax revenue to maintain
+    abatement_percentage : float, default=1.0
+        Percentage of improvement value to abate (1.0 = 100% abatement, 0.5 = 50% abatement)
+    exemption_col : str, optional
+        Column name for exemptions
+    exemption_flag_col : str, optional
+        Column name for exemption flag (1 for exempt, 0 for not exempt)
+    percentage_cap_col : str, optional
+        Column name for percentage cap (maximum tax as percentage of property value)
+        
+    Returns:
+    --------
+    tuple
+        (millage_rate, total_revenue, updated_dataframe)
+    """
+    # Type checking
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pandas DataFrame")
+    if not isinstance(land_value_col, str):
+        raise TypeError("land_value_col must be a string")
+    if not isinstance(improvement_value_col, str):
+        raise TypeError("improvement_value_col must be a string")
+    if not isinstance(current_revenue, (int, float)):
+        try:
+            current_revenue = float(current_revenue)
+        except (ValueError, TypeError):
+            raise TypeError("current_revenue must be a number")
+    if not isinstance(abatement_percentage, (int, float)):
+        try:
+            abatement_percentage = float(abatement_percentage)
+        except (ValueError, TypeError):
+            raise TypeError("abatement_percentage must be a number")
+    if abatement_percentage < 0 or abatement_percentage > 1:
+        raise ValueError("abatement_percentage must be between 0 and 1")
+    if exemption_col is not None and not isinstance(exemption_col, str):
+        raise TypeError("exemption_col must be a string or None")
+    if exemption_flag_col is not None and not isinstance(exemption_flag_col, str):
+        raise TypeError("exemption_flag_col must be a string or None")
+    if percentage_cap_col is not None and not isinstance(percentage_cap_col, str):
+        raise TypeError("percentage_cap_col must be a string or None")
+    
+    # Check if columns exist in the DataFrame
+    for col in [land_value_col, improvement_value_col]:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in DataFrame")
+    if exemption_col is not None and exemption_col not in df.columns:
+        raise ValueError(f"Exemption column '{exemption_col}' not found in DataFrame")
+    if exemption_flag_col is not None and exemption_flag_col not in df.columns:
+        raise ValueError(f"Exemption flag column '{exemption_flag_col}' not found in DataFrame")
+    if percentage_cap_col is not None and percentage_cap_col not in df.columns:
+        raise ValueError(f"Percentage cap column '{percentage_cap_col}' not found in DataFrame")
+    
+    # Make a copy to avoid modifying the original
+    result_df = df.copy()
+    
+    # Ensure numeric values
+    result_df[land_value_col] = pd.to_numeric(result_df[land_value_col], errors='coerce').fillna(0)
+    result_df[improvement_value_col] = pd.to_numeric(result_df[improvement_value_col], errors='coerce').fillna(0)
+    
+    # Apply building abatement (reduce improvement values)
+    result_df['abated_improvement_value'] = result_df[improvement_value_col] * (1 - abatement_percentage)
+    
+    # Handle exemptions - exemptions are applied to land until land is zero
+    if exemption_flag_col is not None:
+        result_df[exemption_flag_col] = pd.to_numeric(result_df[exemption_flag_col], errors='coerce').fillna(0)
+        adj_improvement_value = result_df['abated_improvement_value'].where(result_df[exemption_flag_col] == 0, 0)
+        adj_land_value = result_df[land_value_col].where(result_df[exemption_flag_col] == 0, 0)
+    else:
+        adj_improvement_value = result_df['abated_improvement_value']
+        adj_land_value = result_df[land_value_col]
+    
+    if exemption_col is not None:
+        result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
+        # Apply exemptions to land first until land is zero
+        land_exemption = np.minimum(result_df[exemption_col], adj_land_value)
+        adj_land_value = adj_land_value - land_exemption
+        
+        # Apply remaining exemptions to improvements
+        remaining_exemptions = result_df[exemption_col] - land_exemption
+        adj_improvement_value = (adj_improvement_value - remaining_exemptions).clip(lower=0)
+    
+    # Calculate total taxable value
+    total_taxable_value = float((adj_land_value + adj_improvement_value).sum())
+    
+    # Prevent division by zero
+    if total_taxable_value <= 0:
+        raise ValueError("Total taxable value is zero or negative, cannot calculate millage rate")
+    
+    # If we have a percentage cap, we need to use an iterative approach to find the correct millage rate
+    if percentage_cap_col is not None:
+        result_df[percentage_cap_col] = pd.to_numeric(result_df[percentage_cap_col], errors='coerce').fillna(1)
+        total_value = result_df[land_value_col] + result_df[improvement_value_col]
+        
+        # Initial guess for millage rate
+        millage_rate = (current_revenue * 1000) / total_taxable_value
+        
+        # Iterative approach to find the correct millage rate
+        max_iterations = 40
+        tolerance = 0.00001  # 0.001% tolerance
+        iteration = 0
+        adjustment_factor = 1.0
+        
+        while iteration < max_iterations:
+            # Calculate taxes with current millage rate
+            uncapped_tax = (adj_land_value + adj_improvement_value) * millage_rate / 1000
+            
+            # Apply cap
+            max_tax = total_value * result_df[percentage_cap_col]
+            capped_tax = np.minimum(uncapped_tax, max_tax)
+            
+            # Calculate total revenue with caps applied
+            new_total_revenue = float(capped_tax.sum())
+            
+            # Check if we're close enough to the target revenue
+            if abs(new_total_revenue - current_revenue) / current_revenue < tolerance:
+                break
+                
+            # Adjust millage rate to get closer to target revenue
+            adjustment_factor = current_revenue / new_total_revenue
+            millage_rate *= adjustment_factor
+            
+            iteration += 1
+        
+        if iteration == max_iterations:
+            print(f"Warning: Maximum iterations reached. Revenue target may not be exact. Current: ${new_total_revenue:,.2f}, Target: ${current_revenue:,.2f}")
+    else:
+        # Calculate millage rate to maintain revenue neutrality (no cap)
+        millage_rate = (current_revenue * 1000) / total_taxable_value
+    
+    # Calculate new tax amounts
+    result_df['taxable_value'] = adj_land_value + adj_improvement_value
+    result_df['new_tax'] = result_df['taxable_value'] * millage_rate / 1000
+    
+    # Apply percentage cap if provided
+    if percentage_cap_col is not None:
+        # Calculate maximum tax based on percentage cap
+        total_value = result_df[land_value_col] + result_df[improvement_value_col]
+        max_tax = total_value * result_df[percentage_cap_col]
+        # Create a flag to indicate if the tax was capped
+        result_df['tax_capped'] = result_df['new_tax'] > max_tax
+        # Apply cap - tax cannot exceed the percentage cap of property value
+        result_df['new_tax'] = np.minimum(result_df['new_tax'], max_tax)
+    
+    # Calculate total revenue with new system
+    new_total_revenue = float(result_df['new_tax'].sum())
+    
+    # Calculate change in tax
+    if 'current_tax' in result_df.columns:
+        result_df['tax_change'] = result_df['new_tax'] - result_df['current_tax']
+        # Avoid division by zero
+        result_df['tax_change_pct'] = np.where(
+            result_df['current_tax'] > 0,
+            (result_df['tax_change'] / result_df['current_tax']) * 100,
+            0
+        )
+    
+    print(f"Building abatement model ({abatement_percentage*100:.1f}% abatement)")
+    print(f"Millage rate: {millage_rate:.4f}")
+    print(f"Total tax revenue: ${new_total_revenue:,.2f}")
+    print(f"Target revenue: ${current_revenue:,.2f}")
+    print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+    
+    return millage_rate, new_total_revenue, result_df
+
 def analyze_tax_impact_by_category(df: pd.DataFrame, 
                                   category_cols: Union[str, List[str]], 
                                   current_tax_col: str, 

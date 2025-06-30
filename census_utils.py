@@ -81,9 +81,120 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
 
     return df
 
+def get_census_blockgroups_shapefile_chunked(fips_code: str, max_retries: int = 3) -> gpd.GeoDataFrame:
+    """
+    Get Census Block Group shapefiles for large counties by fetching tract by tract.
+    This approach handles counties like Cook County that are too large for a single request.
+    
+    Args:
+        fips_code (str): 5-digit FIPS code (state + county)
+        max_retries (int): Maximum number of retries for failed requests
+    
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame containing Census Block Group boundaries
+    """
+    import time
+    from typing import List
+    
+    if not isinstance(fips_code, str):
+        raise TypeError("fips_code must be a string")
+    if len(fips_code) != 5:
+        raise ValueError("fips_code must be 5 digits (state + county)")
+
+    state_fips = fips_code[:2]
+    county_fips = fips_code[2:]
+    
+    # First, get all census tracts in the county
+    tracts_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/8/query"
+    tracts_params = {
+        'where': f"STATE='{state_fips}' AND COUNTY='{county_fips}'",
+        'outFields': 'TRACT',
+        'returnGeometry': 'false',
+        'f': 'json'
+    }
+    
+    print(f"🔍 Getting census tracts for county {fips_code}...")
+    
+    try:
+        tracts_response = requests.get(tracts_url, params=tracts_params)
+        tracts_response.raise_for_status()
+        tracts_data = tracts_response.json()
+        
+        if 'features' not in tracts_data:
+            raise ValueError(f"No census tracts found for county {fips_code}")
+            
+        # Extract tract numbers
+        tract_numbers = [feature['attributes']['TRACT'] for feature in tracts_data['features']]
+        print(f"📋 Found {len(tract_numbers)} census tracts")
+        
+    except requests.RequestException as e:
+        raise requests.RequestException(f"Failed to fetch census tracts: {str(e)}")
+
+    # Now fetch block groups for each tract
+    all_block_groups = []
+    bg_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/2/query"
+    
+    for i, tract in enumerate(tract_numbers):
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                bg_params = {
+                    'where': f"STATE='{state_fips}' AND COUNTY='{county_fips}' AND TRACT='{tract}'",
+                    'outFields': '*',
+                    'returnGeometry': 'true',
+                    'f': 'geojson',
+                    'outSR': '4326'  # WGS84
+                }
+                
+                response = requests.get(bg_url, params=bg_params)
+                response.raise_for_status()
+                
+                geojson_data = response.json()
+                
+                if 'features' in geojson_data and geojson_data['features']:
+                    # Convert to GeoDataFrame
+                    tract_gdf = gpd.GeoDataFrame.from_features(geojson_data['features'])
+                    all_block_groups.append(tract_gdf)
+                    
+                print(f"✅ Tract {tract} ({i+1}/{len(tract_numbers)}): {len(geojson_data.get('features', []))} block groups")
+                
+                # Small delay to be respectful to the API
+                time.sleep(0.1)
+                break  # Success, exit retry loop
+                
+            except requests.RequestException as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    print(f"❌ Failed to fetch tract {tract} after {max_retries} retries: {e}")
+                    continue  # Skip this tract
+                else:
+                    print(f"⚠️ Retry {retry_count}/{max_retries} for tract {tract}: {e}")
+                    time.sleep(1)  # Wait before retry
+    
+    if not all_block_groups:
+        raise ValueError(f"No block group data successfully fetched for county {fips_code}")
+    
+    # Combine all block groups
+    print(f"🔗 Combining block groups from {len(all_block_groups)} tracts...")
+    combined_gdf = gpd.pd.concat(all_block_groups, ignore_index=True)
+    
+    # Create standardized GEOID components
+    combined_gdf['state_fips'] = combined_gdf['STATE']
+    combined_gdf['county_fips'] = combined_gdf['COUNTY']  
+    combined_gdf['tract_fips'] = combined_gdf['TRACT']
+    combined_gdf['bg_fips'] = combined_gdf['BLKGRP']
+
+    # Create standardized GEOID
+    combined_gdf['std_geoid'] = combined_gdf['state_fips'] + combined_gdf['county_fips'] + combined_gdf['tract_fips'] + combined_gdf['bg_fips']
+    
+    print(f"🎉 Successfully fetched {len(combined_gdf)} total block groups for county {fips_code}")
+    
+    return combined_gdf
+
 def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
     """
     Get Census Block Group shapefiles for a given FIPS code from the Census TIGERweb service.
+    Automatically handles large counties (like Cook County) by using a chunked approach.
     
     Args:
         fips_code (str): 5-digit FIPS code (state + county)
@@ -101,6 +212,25 @@ def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
     if len(fips_code) != 5:
         raise ValueError("fips_code must be 5 digits (state + county)")
 
+    # Large counties that need chunked approach
+    # Cook County, IL (17031) and other large metropolitan counties
+    large_counties = [
+        '17031',  # Cook County, IL (Chicago)
+        '06037',  # Los Angeles County, CA
+        '48201',  # Harris County, TX (Houston)  
+        '04013',  # Maricopa County, AZ (Phoenix)
+        '06073',  # San Diego County, CA
+        '06059',  # Orange County, CA
+        '36081',  # Queens County, NY
+        '36047',  # Kings County, NY (Brooklyn)
+        '12086',  # Miami-Dade County, FL
+        '53033',  # King County, WA (Seattle)
+    ]
+    
+    if fips_code in large_counties:
+        print(f"🔧 Using chunked approach for large county {fips_code}")
+        return get_census_blockgroups_shapefile_chunked(fips_code)
+
     # TIGERweb REST API endpoint
     base_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/2/query"
     
@@ -116,6 +246,14 @@ def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
     try:
         response = requests.get(base_url, params=params)
         response.raise_for_status()
+        
+        # Check if we got a rejection message (usually HTML error page)
+        content_type = response.headers.get('content-type', '').lower()
+        if 'html' in content_type:
+            print(f"⚠️ Received HTML response instead of JSON - likely request rejected")
+            print(f"🔧 Falling back to chunked approach for county {fips_code}")
+            return get_census_blockgroups_shapefile_chunked(fips_code)
+        
         geojson_data = response.json()
         
         # Convert to GeoDataFrame
@@ -132,8 +270,10 @@ def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
         
         return gdf
         
-    except requests.RequestException as e:
-        raise requests.RequestException(f"Failed to fetch Census Block Group data: {str(e)}")
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"⚠️ Direct request failed: {str(e)}")
+        print(f"🔧 Falling back to chunked approach for county {fips_code}")
+        return get_census_blockgroups_shapefile_chunked(fips_code)
 
 def match_to_census_blockgroups(
     gdf: gpd.GeoDataFrame,
@@ -301,3 +441,90 @@ def enrich_shapefile_with_census(
     )
 
     return enriched_gdf, census_boundaries
+
+def get_census_blockgroups_from_ftp(fips_code: str, year: int = 2022) -> gpd.GeoDataFrame:
+    """
+    Alternative method: Download Census Block Group shapefiles from the Census FTP server.
+    Useful for very large counties where the TIGERweb API fails.
+    
+    Args:
+        fips_code (str): 5-digit FIPS code (state + county)
+        year (int): Census year (default: 2022)
+    
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame containing Census Block Group boundaries
+    """
+    import zipfile
+    import tempfile
+    import urllib.request
+    import os
+    
+    if not isinstance(fips_code, str):
+        raise TypeError("fips_code must be a string")
+    if len(fips_code) != 5:
+        raise ValueError("fips_code must be 5 digits (state + county)")
+
+    state_fips = fips_code[:2]
+    
+    # Census FTP URL for block groups by state
+    ftp_url = f"https://www2.census.gov/geo/tiger/TIGER{year}/BG/tl_{year}_{state_fips}_bg.zip"
+    
+    print(f"📥 Downloading block groups for state {state_fips} from Census FTP...")
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        zip_path = os.path.join(temp_dir, f"tl_{year}_{state_fips}_bg.zip")
+        
+        try:
+            # Download the zip file
+            urllib.request.urlretrieve(ftp_url, zip_path)
+            print(f"✅ Downloaded {os.path.getsize(zip_path):,} bytes")
+            
+            # Extract the zip file
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+            
+            # Find the shapefile
+            shp_files = [f for f in os.listdir(temp_dir) if f.endswith('.shp')]
+            if not shp_files:
+                raise FileNotFoundError("No shapefile found in downloaded zip")
+            
+            shp_path = os.path.join(temp_dir, shp_files[0])
+            
+            # Read the shapefile
+            print(f"📊 Reading shapefile: {shp_files[0]}")
+            gdf = gpd.read_file(shp_path)
+            
+            # Filter to the specific county
+            county_fips = fips_code[2:]
+            filtered_gdf = gdf[gdf['COUNTYFP'] == county_fips].copy()
+            
+            print(f"🎯 Filtered to {len(filtered_gdf)} block groups in county {fips_code}")
+            
+            if len(filtered_gdf) == 0:
+                raise ValueError(f"No block groups found for county {fips_code}")
+            
+            # Rename columns to match TIGERweb format
+            filtered_gdf = filtered_gdf.rename(columns={
+                'STATEFP': 'STATE',
+                'COUNTYFP': 'COUNTY', 
+                'TRACTCE': 'TRACT',
+                'BLKGRPCE': 'BLKGRP'
+            })
+            
+            # Create standardized GEOID components
+            filtered_gdf['state_fips'] = filtered_gdf['STATE']
+            filtered_gdf['county_fips'] = filtered_gdf['COUNTY']
+            filtered_gdf['tract_fips'] = filtered_gdf['TRACT']
+            filtered_gdf['bg_fips'] = filtered_gdf['BLKGRP']
+
+            # Create standardized GEOID
+            filtered_gdf['std_geoid'] = filtered_gdf['state_fips'] + filtered_gdf['county_fips'] + filtered_gdf['tract_fips'] + filtered_gdf['bg_fips']
+            
+            # Ensure CRS is WGS84
+            if filtered_gdf.crs != 'EPSG:4326':
+                filtered_gdf = filtered_gdf.to_crs('EPSG:4326')
+            
+            return filtered_gdf
+            
+        except Exception as e:
+            raise Exception(f"Failed to download/process Census data from FTP: {str(e)}")
