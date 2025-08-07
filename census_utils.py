@@ -6,6 +6,11 @@ from us import states
 import requests
 from shapely.geometry import Point, Polygon
 import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd.DataFrame:
     """
@@ -14,7 +19,7 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
     Args:
         fips_code (str): 5-digit FIPS code (state + county)
         year (int): Census year to query (default: 2022)
-        api_key (str): Census API key. If None, will raise error.
+        api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
     
     Returns:
         pd.DataFrame: DataFrame containing Census demographic data
@@ -29,8 +34,12 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
         raise TypeError("year must be an integer")
     if len(fips_code) != 5:
         raise ValueError("fips_code must be 5 digits (state + county)")
+    
+    # Try to get API key from environment variable if not provided
     if not api_key:
-        raise ValueError("Census API key must be provided")
+        api_key = os.getenv('CENSUS_API_KEY')
+    if not api_key:
+        raise ValueError("Census API key must be provided either as parameter or in CENSUS_API_KEY environment variable")
 
     # Initialize Census API
     c = Census(api_key)
@@ -330,7 +339,7 @@ def get_census_data_with_boundaries(
     Args:
         fips_code (str): 5-digit FIPS code (state + county)
         year (int): Census year to query (default: 2022)
-        api_key (str): Census API key
+        api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
     
     Returns:
         Tuple[pd.DataFrame, gpd.GeoDataFrame]: 
@@ -376,7 +385,7 @@ def enrich_shapefile_with_census(
         shapefile (Union[str, gpd.GeoDataFrame]): Either a path to a shapefile or a GeoDataFrame
         fips_code (str): 5-digit FIPS code (state + county)
         year (int): Census year to query (default: 2022)
-        api_key (str): Census API key
+        api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
     
     Returns:
         Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:

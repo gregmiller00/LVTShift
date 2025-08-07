@@ -7,4 +7,5 @@ requests>=2.31.0
 shapely>=2.0.0
 azure-storage-blob>=12.19.0
 matplotlib>=3.7.0
-seaborn>=0.12.0 
+seaborn>=0.12.0
+python-dotenv>=1.0.0 

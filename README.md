@@ -59,19 +59,28 @@ cd LVTShift
 pip install -r requirements.txt
 ```
 
-### 2. Get Your Data
+### 2. Set Up Environment Variables
+```bash
+# Copy the template and add your API keys
+cp env.template .env
+# Then edit .env with your actual API keys
+```
+You'll need:
+- **Census API Key**: Get one free at [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html)
+
+### 3. Get Your Data
 The package can work with any county that provides:
 - Property tax assessment data (land value, building value, exemptions)
 - Geographic boundaries (for mapping)
 - Ideally available through an online GIS portal or API
 
-### 3. Run the Analysis
+### 4. Run the Analysis
 ```bash
 cd examples
 jupyter notebook southbend.ipynb
 ```
 
-### 4. Adapt to Your City
+### 5. Adapt to Your City
 The Spokane example (`examples/spokane.ipynb`) shows how to:
 - Fetch data from different county systems
 - Handle varying data formats and structures
@@ -84,10 +93,17 @@ The Spokane example (`examples/spokane.ipynb`) shows how to:
 from census_utils import get_census_data_with_boundaries
 
 # Get income and demographic data for any county
+# API key is automatically loaded from environment variables
+census_data, boundaries = get_census_data_with_boundaries(
+    fips_code='18141',  # St. Joseph County, IN
+    year=2022
+)
+
+# Or you can still pass the API key explicitly
 census_data, boundaries = get_census_data_with_boundaries(
     fips_code='18141',  # St. Joseph County, IN
     year=2022,
-    api_key=your_census_key
+    api_key='your_census_api_key_here'
 )
 ```
 
