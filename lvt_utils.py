@@ -2,6 +2,117 @@ import pandas as pd
 import numpy as np
 from typing import Union, List, Tuple, Optional
 
+def calculate_category_tax_summary(df: pd.DataFrame, 
+                                 category_col: str = 'PROPERTY_CATEGORY',
+                                 current_tax_col: str = 'current_tax',
+                                 new_tax_col: str = 'new_tax') -> pd.DataFrame:
+    """
+    Calculate tax change summary by property category.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing property data with tax calculations
+    category_col : str
+        Column name for property categories
+    current_tax_col : str
+        Column name for current tax amounts
+    new_tax_col : str
+        Column name for new tax amounts
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        Summary table with tax changes by category
+    """
+    
+    if category_col not in df.columns:
+        print(f"Warning: Category column '{category_col}' not found. Skipping category summary.")
+        return pd.DataFrame()
+    
+    # Ensure numeric tax columns
+    result_df = df.copy()
+    result_df[current_tax_col] = pd.to_numeric(result_df[current_tax_col], errors='coerce').fillna(0)
+    result_df[new_tax_col] = pd.to_numeric(result_df[new_tax_col], errors='coerce').fillna(0)
+    
+    # Calculate tax change if not already present
+    if 'tax_change' not in result_df.columns:
+        result_df['tax_change'] = result_df[new_tax_col] - result_df[current_tax_col]
+    
+    # Group by category and calculate summary statistics
+    summary = result_df.groupby(category_col).agg({
+        'tax_change': ['sum', 'count', 'mean', 'median'],
+        current_tax_col: 'sum',
+        new_tax_col: 'sum'
+    })
+    
+    # Flatten column names
+    summary.columns = ['total_tax_change_dollars', 'property_count', 'mean_tax_change', 
+                      'median_tax_change', 'total_current_tax', 'total_new_tax']
+    
+    # Calculate percentage change in total tax by category
+    summary['total_tax_change_pct'] = ((summary['total_new_tax'] - summary['total_current_tax']) / 
+                                      summary['total_current_tax']) * 100
+    summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
+    
+    # Reset index and sort by total tax change (descending)
+    summary = summary.reset_index()
+    summary = summary.sort_values('total_tax_change_dollars', ascending=False)
+    
+    return summary
+
+def print_category_tax_summary(summary_df: pd.DataFrame, 
+                             title: str = "Tax Change Summary by Property Category") -> None:
+    """
+    Print a formatted summary of tax changes by category.
+    
+    Parameters:
+    -----------
+    summary_df : pandas.DataFrame
+        Summary DataFrame from calculate_category_tax_summary
+    title : str
+        Title for the summary report
+    """
+    
+    if summary_df.empty:
+        return
+    
+    print(f"\n{title}")
+    print("="*80)
+    
+    # Format the display
+    display_df = summary_df.copy()
+    
+    # Format currency columns
+    currency_cols = ['total_tax_change_dollars', 'mean_tax_change', 'median_tax_change', 
+                    'total_current_tax', 'total_new_tax']
+    
+    for col in currency_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
+    
+    # Format percentage column
+    if 'total_tax_change_pct' in display_df.columns:
+        display_df['total_tax_change_pct'] = display_df['total_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
+    
+    # Select and rename columns for display
+    display_cols = ['PROPERTY_CATEGORY', 'property_count', 'total_tax_change_dollars', 
+                   'total_tax_change_pct', 'mean_tax_change', 'median_tax_change']
+    
+    if all(col in display_df.columns for col in display_cols):
+        display_df = display_df[display_cols]
+        display_df.columns = ['Category', 'Count', 'Total Tax Change ($)', 
+                             'Total Change (%)', 'Mean Change ($)', 'Median Change ($)']
+    
+    print(display_df.to_string(index=False))
+    
+    # Print summary statistics
+    numeric_summary = summary_df.select_dtypes(include=[np.number])
+    print(f"\nOVERALL SUMMARY:")
+    print(f"Total Properties: {summary_df['property_count'].sum():,}")
+    print(f"Total Tax Change: ${summary_df['total_tax_change_dollars'].sum():,.0f}")
+    print(f"Net Revenue Change: ${summary_df['total_new_tax'].sum() - summary_df['total_current_tax'].sum():,.0f}")
+
 def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col: str, exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None, percentage_cap_col: Optional[str] = None, second_millage_rate_col: Optional[str] = None) -> Tuple[float, float, pd.DataFrame]:
     """
     Calculate current property tax based on tax value and millage rate.
@@ -314,6 +425,10 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
     print(f"Target revenue: ${current_revenue:,.2f}")
     print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
     
+    # Print category summary if category column exists
+    category_summary = calculate_category_tax_summary(result_df)
+    print_category_tax_summary(category_summary, "Split-Rate Tax Change by Property Category")
+    
     return land_millage, improvement_millage, new_total_revenue, result_df
 
 def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
@@ -493,6 +608,10 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
     print(f"Total tax revenue: ${new_total_revenue:,.2f}")
     print(f"Target revenue: ${current_revenue:,.2f}")
     print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+    
+    # Print category summary if category column exists
+    category_summary = calculate_category_tax_summary(result_df)
+    print_category_tax_summary(category_summary, f"Building Abatement ({abatement_percentage*100:.1f}%) Tax Change by Property Category")
     
     return millage_rate, new_total_revenue, result_df
 
@@ -702,6 +821,10 @@ def model_stacking_improvement_exemption(df: pd.DataFrame, land_value_col: str, 
     print(f"Total tax revenue: ${new_total_revenue:,.2f}")
     print(f"Target revenue: ${current_revenue:,.2f}")
     print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+    
+    # Print category summary if category column exists
+    category_summary = calculate_category_tax_summary(result_df)
+    print_category_tax_summary(category_summary, f"Stacking Improvement Exemption ({improvement_exemption_percentage*100:.1f}%{floor_text}) Tax Change by Property Category")
     
     return millage_rate, new_total_revenue, result_df
 

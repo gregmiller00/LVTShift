@@ -368,3 +368,150 @@ def print_development_penalty_summary(analysis_results: Dict) -> None:
     print(f"\nInterpretation:")
     for key, message in analysis_results['interpretation'].items():
         print(f"  {message}") 
+
+
+def analyze_property_values_by_category(df: pd.DataFrame,
+                                      category_col: str,
+                                      land_value_col: str = 'land_value',
+                                      improvement_value_col: str = 'improvement_value',
+                                      exemption_col: Optional[str] = None,
+                                      exemption_flag_col: Optional[str] = None) -> pd.DataFrame:
+    """
+    Analyze total land values, improvement values, and ratios by property category.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing property data
+    category_col : str
+        Column name for property categories
+    land_value_col : str
+        Column name for land values
+    improvement_value_col : str
+        Column name for improvement values
+    exemption_col : str, optional
+        Column name for exemption amounts
+    exemption_flag_col : str, optional
+        Column name for exemption flag (1 for fully exempt, 0 for not exempt)
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        Summary table with land values, improvement values, and ratios by category
+    """
+    
+    # Ensure numeric values
+    result_df = df.copy()
+    result_df[land_value_col] = pd.to_numeric(result_df[land_value_col], errors='coerce').fillna(0)
+    result_df[improvement_value_col] = pd.to_numeric(result_df[improvement_value_col], errors='coerce').fillna(0)
+    
+    if exemption_col:
+        result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
+    if exemption_flag_col:
+        result_df[exemption_flag_col] = pd.to_numeric(result_df[exemption_flag_col], errors='coerce').fillna(0)
+    
+    # Group by category and calculate totals
+    summary = result_df.groupby(category_col).agg({
+        land_value_col: ['sum', 'count'],
+        improvement_value_col: 'sum'
+    })
+    
+    # Flatten column names
+    summary.columns = ['total_land_value', 'property_count', 'total_improvement_value']
+    
+    # Calculate improvement to land ratio
+    summary['improvement_land_ratio'] = summary['total_improvement_value'] / summary['total_land_value']
+    summary['improvement_land_ratio'] = summary['improvement_land_ratio'].replace([np.inf, -np.inf], 0).fillna(0)
+    
+    # Add exemption analysis if exemption columns provided
+    if exemption_col:
+        exemption_summary = result_df.groupby(category_col)[exemption_col].sum()
+        summary['total_exemptions'] = exemption_summary
+    
+    if exemption_flag_col:
+        fully_exempt_count = result_df[result_df[exemption_flag_col] == 1].groupby(category_col).size()
+        summary['fully_exempt_count'] = fully_exempt_count.fillna(0)
+        
+        # Calculate values excluding fully exempt properties
+        non_exempt_df = result_df[result_df[exemption_flag_col] == 0]
+        non_exempt_summary = non_exempt_df.groupby(category_col).agg({
+            land_value_col: 'sum',
+            improvement_value_col: 'sum'
+        })
+        non_exempt_summary.columns = ['non_exempt_land_value', 'non_exempt_improvement_value']
+        
+        # Calculate non-exempt improvement to land ratio
+        non_exempt_summary['non_exempt_improvement_land_ratio'] = (
+            non_exempt_summary['non_exempt_improvement_value'] / 
+            non_exempt_summary['non_exempt_land_value']
+        )
+        non_exempt_summary['non_exempt_improvement_land_ratio'] = (
+            non_exempt_summary['non_exempt_improvement_land_ratio']
+            .replace([np.inf, -np.inf], 0).fillna(0)
+        )
+        
+        # Merge with main summary
+        summary = summary.join(non_exempt_summary, how='left').fillna(0)
+    
+    # Reset index to make category a regular column
+    summary = summary.reset_index()
+    
+    # Sort by total land value (descending)
+    summary = summary.sort_values('total_land_value', ascending=False)
+    
+    return summary
+
+def print_property_values_summary(summary_df: pd.DataFrame, 
+                                 title: str = "Property Values by Category") -> None:
+    """
+    Print a formatted summary of property values by category.
+    
+    Parameters:
+    -----------
+    summary_df : pandas.DataFrame
+        Summary DataFrame from analyze_property_values_by_category
+    title : str
+        Title for the summary report
+    """
+    
+    print("="*80)
+    print(title.upper())
+    print("="*80)
+    
+    # Format the display
+    display_df = summary_df.copy()
+    
+    # Format currency columns
+    currency_cols = ['total_land_value', 'total_improvement_value', 'total_exemptions']
+    if 'non_exempt_land_value' in display_df.columns:
+        currency_cols.extend(['non_exempt_land_value', 'non_exempt_improvement_value'])
+    
+    for col in currency_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
+    
+    # Format ratio columns
+    ratio_cols = ['improvement_land_ratio']
+    if 'non_exempt_improvement_land_ratio' in display_df.columns:
+        ratio_cols.append('non_exempt_improvement_land_ratio')
+    
+    for col in ratio_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"{x:.2f}")
+    
+    # Print the table
+    print(display_df.to_string(index=False))
+    
+    # Print summary statistics
+    numeric_df = summary_df.select_dtypes(include=[np.number])
+    print(f"\nSUMMARY TOTALS:")
+    print(f"Total Properties: {summary_df['property_count'].sum():,}")
+    print(f"Total Land Value: ${summary_df['total_land_value'].sum():,.0f}")
+    print(f"Total Improvement Value: ${summary_df['total_improvement_value'].sum():,.0f}")
+    print(f"Overall Improvement:Land Ratio: {summary_df['total_improvement_value'].sum() / summary_df['total_land_value'].sum():.2f}")
+    
+    if 'total_exemptions' in summary_df.columns:
+        print(f"Total Exemptions: ${summary_df['total_exemptions'].sum():,.0f}")
+    
+    if 'fully_exempt_count' in summary_df.columns:
+        print(f"Fully Exempt Properties: {summary_df['fully_exempt_count'].sum():,.0f}") 
