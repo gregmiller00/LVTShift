@@ -696,49 +696,45 @@ def model_stacking_improvement_exemption(df: pd.DataFrame, land_value_col: str, 
     
     # Make a copy to avoid modifying the original
     result_df = df.copy()
-    
+
     # Ensure numeric values
     result_df[land_value_col] = pd.to_numeric(result_df[land_value_col], errors='coerce').fillna(0)
     result_df[improvement_value_col] = pd.to_numeric(result_df[improvement_value_col], errors='coerce').fillna(0)
     
+    # --- Calculate all exemption logic first ---
     # Apply building abatement floor first - directly reduce improvement value
-    improvement_after_floor = (result_df[improvement_value_col] - building_abatement_floor).clip(lower=0)
+    floor_exemption_amount = result_df[improvement_value_col].clip(upper=building_abatement_floor)
+    improvement_after_floor = (result_df[improvement_value_col] - floor_exemption_amount)
     result_df['improvement_after_floor'] = improvement_after_floor
-    
+
     # Calculate improvement exemption amount (percentage applied to remaining improvement value)
     improvement_exemption = improvement_after_floor * improvement_exemption_percentage
-    result_df['improvement_exemption'] = improvement_exemption
-    
+    result_df['improvement_exemption'] = improvement_exemption  + floor_exemption_amount
+
     # Calculate stacked exemptions (existing + improvement exemption)
     if exemption_col is not None:
         result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
-        stacked_exemptions = result_df[exemption_col] + improvement_exemption
+        stacked_exemptions = result_df[exemption_col] + improvement_exemption 
     else:
         stacked_exemptions = improvement_exemption
-    
+
     result_df['stacked_exemptions'] = stacked_exemptions
-    
+
     # Calculate total property value using improvement value after floor
-    total_property_value = result_df[land_value_col] + improvement_after_floor
+    total_property_value = result_df[land_value_col] + result_df[improvement_value_col]
     result_df['total_property_value'] = total_property_value
-    
-    # Handle exemption flags (properties completely exempt from tax)
-    if exemption_flag_col is not None:
-        result_df[exemption_flag_col] = pd.to_numeric(result_df[exemption_flag_col], errors='coerce').fillna(0)
-        # For properties with exemption flag, set taxable value to 0
-        adj_total_value = total_property_value.where(result_df[exemption_flag_col] == 0, 0)
-        adj_stacked_exemptions = stacked_exemptions.where(result_df[exemption_flag_col] == 0, 0)
-    else:
-        adj_total_value = total_property_value
-        adj_stacked_exemptions = stacked_exemptions
-    
+
+
     # Calculate taxable value (total value minus stacked exemptions, but not less than 0)
-    taxable_value = (adj_total_value - adj_stacked_exemptions).clip(lower=0)
+    taxable_value = (total_property_value - stacked_exemptions).clip(lower=0)
     result_df['taxable_value'] = taxable_value
-    
+    print("Sum of taxable value:", taxable_value.sum())
+    print("Sum of total_property_value:", total_property_value.sum())
+    print("Sum of exemptions:", stacked_exemptions.sum())
     # Calculate total taxable value across all properties
     total_taxable_value = float(taxable_value.sum())
-    
+
+
     # Prevent division by zero
     if total_taxable_value <= 0:
         raise ValueError("Total taxable value is zero or negative, cannot calculate millage rate")
