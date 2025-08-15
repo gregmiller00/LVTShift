@@ -7,7 +7,8 @@ def calculate_category_tax_summary(df: pd.DataFrame,
                                  current_tax_col: str = 'current_tax',
                                  new_tax_col: str = 'new_tax') -> pd.DataFrame:
     """
-    Calculate tax change summary by property category.
+    Calculate tax change summary by property category, including median and mean tax change percent
+    (computed per parcel, then aggregated).
     
     Parameters:
     -----------
@@ -39,25 +40,36 @@ def calculate_category_tax_summary(df: pd.DataFrame,
     if 'tax_change' not in result_df.columns:
         result_df['tax_change'] = result_df[new_tax_col] - result_df[current_tax_col]
     
+    # Calculate per-parcel tax change percent
+    result_df['tax_change_pct'] = np.where(
+        result_df[current_tax_col] != 0,
+        (result_df['tax_change'] / result_df[current_tax_col]) * 100,
+        0
+    )
+    
     # Group by category and calculate summary statistics
     summary = result_df.groupby(category_col).agg({
         'tax_change': ['sum', 'count', 'mean', 'median'],
+        'tax_change_pct': ['mean', 'median'],
         current_tax_col: 'sum',
         new_tax_col: 'sum'
     })
     
     # Flatten column names
-    summary.columns = ['total_tax_change_dollars', 'property_count', 'mean_tax_change', 
-                      'median_tax_change', 'total_current_tax', 'total_new_tax']
+    summary.columns = [
+        'total_tax_change_dollars', 'property_count', 'mean_tax_change', 'median_tax_change',
+        'mean_tax_change_pct', 'median_tax_change_pct',
+        'total_current_tax', 'total_new_tax'
+    ]
     
-    # Calculate percentage change in total tax by category
+    # Calculate percentage change in total tax by category (aggregate)
     summary['total_tax_change_pct'] = ((summary['total_new_tax'] - summary['total_current_tax']) / 
                                       summary['total_current_tax']) * 100
     summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
     
-    # Reset index and sort by total tax change (descending)
+    # Reset index and sort by property count (descending)
     summary = summary.reset_index()
-    summary = summary.sort_values('total_tax_change_dollars', ascending=False)
+    summary = summary.sort_values('property_count', ascending=False)
     
     return summary
 
@@ -91,18 +103,26 @@ def print_category_tax_summary(summary_df: pd.DataFrame,
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
     
-    # Format percentage column
+    # Format percentage columns
     if 'total_tax_change_pct' in display_df.columns:
         display_df['total_tax_change_pct'] = display_df['total_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
+    if 'mean_tax_change_pct' in display_df.columns:
+        display_df['mean_tax_change_pct'] = display_df['mean_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
+    if 'median_tax_change_pct' in display_df.columns:
+        display_df['median_tax_change_pct'] = display_df['median_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
     
     # Select and rename columns for display
     display_cols = ['PROPERTY_CATEGORY', 'property_count', 'total_tax_change_dollars', 
-                   'total_tax_change_pct', 'mean_tax_change', 'median_tax_change']
+                   'total_tax_change_pct', 'mean_tax_change', 'median_tax_change',
+                   'mean_tax_change_pct', 'median_tax_change_pct']
     
     if all(col in display_df.columns for col in display_cols):
         display_df = display_df[display_cols]
         display_df.columns = ['Category', 'Count', 'Total Tax Change ($)', 
-                             'Total Change (%)', 'Mean Change ($)', 'Median Change ($)']
+                             'Total Change (%)', 'Mean Change ($)', 'Median Change ($)',
+                             'Avg % Change', 'Median % Change']
+        # Sort the display rows by Count (largest to smallest)
+        display_df = display_df.sort_values('Count', ascending=False)
     
     print(display_df.to_string(index=False))
     
@@ -112,6 +132,12 @@ def print_category_tax_summary(summary_df: pd.DataFrame,
     print(f"Total Properties: {summary_df['property_count'].sum():,}")
     print(f"Total Tax Change: ${summary_df['total_tax_change_dollars'].sum():,.0f}")
     print(f"Net Revenue Change: ${summary_df['total_new_tax'].sum() - summary_df['total_current_tax'].sum():,.0f}")
+    # Print overall mean and median percent change
+    if 'mean_tax_change_pct' in summary_df.columns and 'median_tax_change_pct' in summary_df.columns:
+        overall_mean_pct = summary_df['mean_tax_change_pct'].mean()
+        overall_median_pct = summary_df['median_tax_change_pct'].median()
+        print(f"Average Percent Change (mean of means): {overall_mean_pct:.2f}%")
+        print(f"Median Percent Change (median of medians): {overall_median_pct:.2f}%")
 
 def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col: str, exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None, percentage_cap_col: Optional[str] = None, second_millage_rate_col: Optional[str] = None) -> Tuple[float, float, pd.DataFrame]:
     """
@@ -714,9 +740,9 @@ def model_stacking_improvement_exemption(df: pd.DataFrame, land_value_col: str, 
     # Calculate stacked exemptions (existing + improvement exemption)
     if exemption_col is not None:
         result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
-        stacked_exemptions = result_df[exemption_col] + improvement_exemption 
+        stacked_exemptions = result_df[exemption_col] + result_df['improvement_exemption']
     else:
-        stacked_exemptions = improvement_exemption
+        stacked_exemptions = result_df['improvement_exemption']
 
     result_df['stacked_exemptions'] = stacked_exemptions
 
