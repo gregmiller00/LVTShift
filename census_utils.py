@@ -315,16 +315,31 @@ def match_to_census_blockgroups(
     if gdf.crs != census_gdf.crs:
         census_gdf = census_gdf.to_crs(gdf.crs)
 
-    # Use centroid of each geometry for the join to avoid issues with overlapping boundaries
-    gdf_centroids = gdf.copy()
-    gdf_centroids.geometry = gdf_centroids.geometry.centroid
+    # Preserve original polygon geometry
+    original_geometry = gdf.geometry.copy()
 
-    # Perform spatial join
+    # Compute centroids in a projected CRS to avoid geographic centroid warnings
+    if gdf.crs is not None and getattr(gdf.crs, "is_geographic", False):
+        gdf_for_centroid = gdf.to_crs("EPSG:3857")
+        gdf_centroids = gdf_for_centroid.copy()
+        gdf_centroids.geometry = gdf_for_centroid.geometry.centroid
+        # Project centroids back to the original CRS for the join
+        gdf_centroids = gdf_centroids.to_crs(gdf.crs)
+    else:
+        gdf_centroids = gdf.copy()
+        gdf_centroids.geometry = gdf_centroids.geometry.centroid
+
+    # Perform spatial join using centroids to avoid overlapping boundary issues
     joined = gpd.sjoin(gdf_centroids, census_gdf, how=join_type, predicate='within')
 
     # Drop unnecessary columns from the join
     if 'index_right' in joined.columns:
         joined = joined.drop(columns=['index_right'])
+
+    # Restore original polygon geometries and CRS
+    joined.geometry = original_geometry.loc[joined.index].values
+    if joined.crs is None and gdf.crs is not None:
+        joined.set_crs(gdf.crs, inplace=True)
 
     return joined
 
