@@ -1,4 +1,5 @@
 import pandas as pd
+import geopandas as gpd
 import numpy as np
 from typing import Union, List, Tuple, Optional
 
@@ -1029,4 +1030,200 @@ def analyze_tax_impact_by_category(df: pd.DataFrame,
     else:  # Default sort by count
         summary = summary.sort_values('count', ascending=ascending)
     
-    return summary 
+    return summary
+
+
+def categorize_property_type(prop_use_desc: str) -> str:
+    """
+    Categorize property type based on property use description.
+    This function provides a standardized categorization that can be adapted
+    for different jurisdictions by modifying the category mappings.
+    
+    Parameters:
+    -----------
+    prop_use_desc : str
+        Property use description from assessor data
+        
+    Returns:
+    --------
+    str
+        Standardized property category
+    """
+    if pd.isna(prop_use_desc):
+        return "Other"
+    
+    prop_use_desc = str(prop_use_desc).strip()
+    
+    # Direct mapping based on common property use descriptions
+    # This can be customized for different jurisdictions
+    category_mapping = {
+        "Single Family": ["Single Unit", "Single Family", "Single-Family", "Residential - Single Family"],
+        "Small Multi-Family (2-4 units)": ["Two-to-Four Unit", "Duplex", "Triplex", "Fourplex", "2-4 Units"],
+        "Large Multi-Family (5+ units)": ["Five-Plus Unit", "Multi-Family", "Apartment", "5+ Units"],
+        "Other Residential": ["Other Residential", "Vacation Home", "Manufactured Home"],
+        "Mobile Home Park": ["Mobile Home Park", "Manufactured Housing Park"],
+        "Vacant Land": ["Vacant Land", "Vacant", "Unimproved Land"],
+        "Agricultural": ["Cur - Use - Ag", "Agricultural Not Classified", "Agricultural", "Farm", "Forestry"],
+        "Retail/Service/Commercial": [
+            "Retail", "Restaurant", "Gas Station", "Auto Sales", "Bank", "Office",
+            "Medical", "Wholesale", "Warehouse", "Storage", "Commercial", "Service"
+        ],
+        "Industrial": ["Industrial", "Manufacturing", "Factory"],
+        "Institutional": ["Government", "School", "Church", "Hospital", "Institutional"],
+        "Utilities": ["Utility", "Utilities", "Pipeline", "Transmission"],
+        "Parking": ["Parking", "Parking Lot", "Parking Garage"]
+    }
+    
+    # Check each category for matches
+    for category, keywords in category_mapping.items():
+        for keyword in keywords:
+            if keyword.lower() in prop_use_desc.lower():
+                return category
+    
+    # If no match found, return "Other"
+    return "Other"
+
+
+def ensure_geodataframe(df: Union[pd.DataFrame, gpd.GeoDataFrame], geometry_col: str = 'geometry') -> gpd.GeoDataFrame:
+    """
+    Ensures that a DataFrame with geometry column is converted to a GeoDataFrame.
+    If conversion fails, tries to robustly decode geometry values before failing.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame or gpd.GeoDataFrame
+        DataFrame with geometry data
+    geometry_col : str, default='geometry'
+        Name of the geometry column
+        
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        GeoDataFrame with proper CRS set
+    """
+    import shapely
+    import binascii
+    from shapely import wkt
+    
+    def try_decode_geometry(val):
+        """Try multiple methods to decode geometry values"""
+        if pd.isna(val) or val is None:
+            return None
+        
+        # If already a geometry object, return as-is
+        if isinstance(val, (shapely.geometry.base.BaseGeometry)):
+            return val
+        
+        # Try as WKT string
+        if isinstance(val, str):
+            try:
+                return wkt.loads(val)
+            except Exception:
+                pass
+        
+        # Try as WKB hex string
+        if isinstance(val, str):
+            try:
+                return shapely.wkb.loads(binascii.unhexlify(val))
+            except Exception:
+                pass
+        
+        # Try as WKB bytes
+        if isinstance(val, bytes):
+            try:
+                return shapely.wkb.loads(val)
+            except Exception:
+                pass
+        
+        return None
+    
+    # If already a GeoDataFrame, ensure CRS is set
+    if isinstance(df, gpd.GeoDataFrame):
+        if df.crs is None:
+            df = df.set_crs('EPSG:4326')  # Default to WGS84
+        return df
+    
+    # Check if geometry column exists
+    if geometry_col not in df.columns:
+        print(f"Warning: Geometry column '{geometry_col}' not found in DataFrame")
+        return df
+    
+    # Try direct conversion first
+    try:
+        gdf = gpd.GeoDataFrame(df, geometry=geometry_col)
+        if gdf.crs is None:
+            gdf = gdf.set_crs('EPSG:4326')
+        return gdf
+    except Exception as e:
+        print(f"Direct conversion failed: {e}")
+    
+    # Try robust geometry decoding
+    try:
+        df_copy = df.copy()
+        df_copy[geometry_col] = df_copy[geometry_col].apply(try_decode_geometry)
+        
+        # Remove rows where geometry decoding failed
+        df_copy = df_copy.dropna(subset=[geometry_col])
+        
+        gdf = gpd.GeoDataFrame(df_copy, geometry=geometry_col)
+        if gdf.crs is None:
+            gdf = gdf.set_crs('EPSG:4326')
+        return gdf
+    except Exception as e:
+        print(f"Robust geometry conversion failed: {e}")
+    
+    # Return as-is if no geometry column found
+    return df
+
+
+def extract_date_from_filename(path: str) -> Optional[pd.Timestamp]:
+    """
+    Extracts a datetime object from a filename with date pattern.
+    Supports patterns like: filename_YYYY_MM_DD.extension
+    
+    Parameters:
+    -----------
+    path : str
+        File path to extract date from
+        
+    Returns:
+    --------
+    pd.Timestamp or None
+        Extracted date or None if parsing fails
+    """
+    import os
+    from datetime import datetime
+    
+    base = os.path.basename(path)
+    # Remove extension
+    base_no_ext = os.path.splitext(base)[0]
+    
+    # Split by underscore and look for date pattern
+    parts = base_no_ext.split("_")
+    
+    # Look for YYYY_MM_DD pattern at the end
+    if len(parts) >= 3:
+        try:
+            # Try the last three parts as YYYY, MM, DD
+            date_str = "_".join(parts[-3:])
+            return pd.to_datetime(datetime.strptime(date_str, "%Y_%m_%d"))
+        except Exception:
+            pass
+    
+    # Try other common date patterns
+    common_patterns = [
+        "%Y-%m-%d",
+        "%Y%m%d", 
+        "%m-%d-%Y",
+        "%m_%d_%Y"
+    ]
+    
+    for pattern in common_patterns:
+        for i in range(len(parts) - 2):
+            try:
+                date_str = "_".join(parts[i:i+3])
+                return pd.to_datetime(datetime.strptime(date_str, pattern))
+            except Exception:
+                continue
+    
+    return None 

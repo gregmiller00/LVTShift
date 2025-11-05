@@ -8,6 +8,7 @@ from shapely.geometry import Point, Polygon
 import json
 import os
 from dotenv import load_dotenv
+import numpy as np
 
 # Load environment variables from .env file
 load_dotenv()
@@ -552,3 +553,192 @@ def get_census_blockgroups_from_ftp(fips_code: str, year: int = 2022) -> gpd.Geo
             
         except Exception as e:
             raise Exception(f"Failed to download/process Census data from FTP: {str(e)}")
+
+
+def calculate_median_percentage_by_quintile(
+    df: pd.DataFrame, 
+    group_col: str, 
+    value_col: str,
+    weight_col: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Calculate median percentage by quintile groups with optional weighting.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe
+    group_col : str
+        Column to create quintiles from (e.g., 'median_income')
+    value_col : str
+        Value column to calculate median for (e.g., 'tax_change_pct')
+    weight_col : str, optional
+        Column to use for weighting (e.g., 'parcel_count')
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Summary with quintiles and median values
+    """
+    from viz import weighted_median
+    
+    # Filter positive values for income-based quintiles
+    work_df = df.copy()
+    if group_col == 'median_income' and group_col in work_df.columns:
+        work_df = work_df[work_df['median_income'] > 0].copy()
+    
+    # Create quintiles
+    work_df[f'{group_col}_quintile'] = pd.qcut(
+        work_df[group_col], 
+        5, 
+        labels=["Q1 (Lowest)", "Q2", "Q3", "Q4", "Q5 (Highest)"]
+    )
+    
+    # Calculate weighted median by quintile
+    def calc_weighted_median(group):
+        if weight_col and weight_col in group.columns:
+            weights = group[weight_col].values
+        else:
+            weights = np.ones(len(group))
+        return weighted_median(group[value_col].values, weights)
+    
+    summary = work_df.groupby(f'{group_col}_quintile').apply(
+        lambda g: pd.Series({
+            'count': len(g),
+            'median_value': calc_weighted_median(g),
+            'mean_value': g[value_col].mean(),
+            f'mean_{group_col}': g[group_col].mean()
+        })
+    ).reset_index()
+    
+    return summary
+
+
+def match_parcels_to_demographics(
+    parcels_gdf: gpd.GeoDataFrame,
+    demographics_df: pd.DataFrame,
+    block_groups_gdf: gpd.GeoDataFrame,
+    demographic_id_col: str = 'std_geoid',
+    block_group_id_col: str = 'GEOID'
+) -> gpd.GeoDataFrame:
+    """
+    Match parcels to demographic data via spatial join with block groups.
+    
+    Parameters:
+    -----------
+    parcels_gdf : gpd.GeoDataFrame
+        Parcel data with geometry
+    demographics_df : pd.DataFrame
+        Census demographic data
+    block_groups_gdf : gpd.GeoDataFrame
+        Block group boundaries
+    demographic_id_col : str, default='std_geoid'
+        ID column in demographics data
+    block_group_id_col : str, default='GEOID'
+        ID column in block groups data
+        
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        Parcels with demographic data attached
+    """
+    # Ensure consistent CRS
+    if parcels_gdf.crs != block_groups_gdf.crs:
+        block_groups_gdf = block_groups_gdf.to_crs(parcels_gdf.crs)
+    
+    # Spatial join parcels to block groups
+    parcels_with_bg = gpd.sjoin(
+        parcels_gdf, 
+        block_groups_gdf[[block_group_id_col, 'geometry']], 
+        how='left', 
+        predicate='within'
+    )
+    
+    # Merge with demographic data
+    merged = parcels_with_bg.merge(
+        demographics_df,
+        left_on=block_group_id_col,
+        right_on=demographic_id_col,
+        how='left'
+    )
+    
+    return merged
+
+
+def create_demographic_summary(
+    df: pd.DataFrame,
+    group_col: str,
+    tax_change_col: str = 'tax_change',
+    tax_change_pct_col: str = 'tax_change_pct',
+    current_tax_col: str = 'current_tax',
+    new_tax_col: str = 'new_tax'
+) -> pd.DataFrame:
+    """
+    Create demographic summary statistics for tax impact analysis.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe with demographic and tax data
+    group_col : str
+        Column to group by (e.g., 'std_geoid' for block groups)
+    tax_change_col : str, default='tax_change'
+        Tax change column name
+    tax_change_pct_col : str, default='tax_change_pct'
+        Tax change percentage column name
+    current_tax_col : str, default='current_tax'
+        Current tax column name
+    new_tax_col : str, default='new_tax'
+        New tax column name
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Demographic summary with tax impact statistics
+    """
+    # Calculate tax change percentage if not present
+    work_df = df.copy()
+    if tax_change_pct_col not in work_df.columns:
+        work_df[tax_change_pct_col] = np.where(
+            work_df[current_tax_col] != 0,
+            (work_df[tax_change_col] / work_df[current_tax_col]) * 100,
+            0
+        )
+    
+    # Group by demographic unit
+    summary = work_df.groupby(group_col).agg({
+        tax_change_col: ['sum', 'count', 'mean'],
+        tax_change_pct_col: 'mean',
+        current_tax_col: 'sum',
+        new_tax_col: 'sum',
+        # Include demographic columns if they exist
+        **{col: 'first' for col in ['median_income', 'minority_pct', 'black_pct', 'total_pop'] 
+           if col in work_df.columns}
+    })
+    
+    # Flatten column names
+    summary.columns = ['_'.join(col).strip() if col[1] else col[0] for col in summary.columns.values]
+    summary.columns = [col.replace('_first', '') for col in summary.columns]
+    
+    # Rename for clarity
+    rename_dict = {
+        f'{tax_change_col}_sum': 'total_tax_change',
+        f'{tax_change_col}_count': 'parcel_count',
+        f'{tax_change_col}_mean': 'mean_tax_change',
+        f'{tax_change_pct_col}_mean': 'mean_tax_change_pct',
+        f'{current_tax_col}_sum': 'total_current_tax',
+        f'{new_tax_col}_sum': 'total_new_tax'
+    }
+    summary = summary.rename(columns=rename_dict)
+    
+    # Calculate total tax change percentage
+    summary['total_tax_change_pct'] = (
+        (summary['total_new_tax'] - summary['total_current_tax']) / 
+        summary['total_current_tax']
+    ) * 100
+    summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
+    
+    # Reset index
+    summary = summary.reset_index()
+    
+    return summary
