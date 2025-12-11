@@ -4,7 +4,7 @@ from typing import Union, List, Tuple, Optional
 
 def calculate_category_tax_summary(
     df: pd.DataFrame, 
-    category_col: str = 'PROPERTY_CATEGORY',
+    category_col: str = 'current_use',
     current_tax_col: str = 'current_tax',
     new_tax_col: str = 'new_tax',
     pct_threshold: float = 10.0
@@ -690,6 +690,46 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
     
     return millage_rate, new_total_revenue, result_df
 
+def model_full_building_abatement_on_subsection(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
+                                 current_revenue: float, parcel_filter_col: str, abatement_percentage: float = 1.0,
+                                 exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
+                                 percentage_cap_col: Optional[str] = None) -> Tuple[float, float, pd.DataFrame]:
+    """
+    Model a building abatement system where improvements are reduced by a specified percentage, on only a subsection of the property in the dataframe as defined by parcel_filter_col
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing property data
+    land_value_col : str
+        Column name for land value
+    improvement_value_col : str
+        Column name for improvement/building value
+    current_revenue : float
+        Current tax revenue to maintain
+    parcel_filter_col : str
+        Column name for boolean datatype on which to filter the parcels
+    abatement_percentage : float, default=1.0
+        Percentage of improvement value to abate (1.0 = 100% abatement, 0.5 = 50% abatement)
+    exemption_col : str, optional
+        Column name for exemptions
+    exemption_flag_col : str, optional
+        Column name for exemption flag (1 for exempt, 0 for not exempt)
+    percentage_cap_col : str, optional
+        Column name for percentage cap (maximum tax as percentage of property value)
+        
+    Returns:
+    --------
+    tuple
+        (millage_rate, total_revenue, updated_dataframe)
+    """
+
+    filter = df[parcel_filter_col]
+
+    filtered_df = df.loc[filter]
+
+    return model_full_building_abatement(filtered_df, land_value_col, improvement_value_col, current_revenue, abatement_percentage, exemption_col, exemption_flag_col, percentage_cap_col)
+
 def model_stacking_improvement_exemption(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
                                        current_revenue: float, improvement_exemption_percentage: float = 0.5,
                                        building_abatement_floor: float = 0.0,
@@ -1030,3 +1070,233 @@ def analyze_tax_impact_by_category(df: pd.DataFrame,
         summary = summary.sort_values('count', ascending=ascending)
     
     return summary 
+
+def model_lvt_shift(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
+                                 current_revenue: float, apply_exemption_to_land: bool = False,
+                                 exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
+                                 percentage_cap_col: Optional[str] = None, uniform_parcel_col: Optional[str] = None,
+                                 verbose: bool = False
+                                 ) -> Tuple[float, float, pd.DataFrame]:
+    
+    """
+    Model a building abatement system where improvements are reduced by a specified percentage.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing property data
+    land_value_col : str
+        Column name for land value
+    improvement_value_col : str
+        Column name for improvement/building value
+    current_revenue : float
+        Current tax revenue to maintain
+    apply_exemption_to_land : bool, default=false
+        Flag on whether to apply the exempted value in exemption_col to the full property value or just the land value.
+        Functionally, this determines if exemptions (generally) apply to the LVT or not.
+        Note, a parcel is marked as a uniform parcel, then the exemption will apply to the full property value no matter what this variable says
+    exemption_col : str, optional
+        Column name for exemptions
+    exemption_flag_col : str, optional
+        Column name for exemption flag (1 for exempt, 0 for not exempt)
+    percentage_cap_col : str, optional
+        Column name for percentage cap (maximum tax as percentage of property value)
+    uniform_parcel_col : str, optional
+        Column name for parcels that are not exempt but should not have their tax calculation modifed. In other words, they should be taxed
+        by the current uniform millage rate, which should yield no change in taxes for these properties
+        (1 for uniform, 0 for not uniform)
+        
+    Returns:
+    --------
+    tuple
+        (millage_rate, total_revenue, updated_dataframe)
+    """
+
+    # Structure
+    # 1. type checking
+    # 2. create copy result_df
+    # . Determine what land needs to be uniform (if any), divide it off, and subtract its total revenue from the current revenue
+    # . Determine how parcels we we will tax with the LVT, and how much land value they have
+    # . Determine the millage rate (with the optional cap applied)
+    # . Fill back in the result_df with the tax value of each property using the millage rate and their taxable value, or their current_tax if they are uniform
+
+    # So at the beginning of the run, we should modify the result dataframe to set the taxable_value
+
+    # At the end, we will set the new_tax back onto the results dataframe by multiplying the calculated
+    # millage rate on the taxable value for non-uniform parcels, and the current_tax for uniform parcels
+    # We will then use the new_tax and current_tax to calculate the new_tax_change, and new_tax_pct
+
+    # Before we start calculating the millage rate, we need to:
+    # 1. Calculate the taxable_value for each parcel at the very beginning (based on their exemption/uniform status, 
+    #    the exemption behavior, and the exemption value) and save it into the results dataframe
+    # 2. Create series used to calcuate the millage rate based on the taxable value column in the results dataframe, minus
+    #    the uniform and exempt properties
+    # 3. Sum up the total revenue from all uniform properties, and subtract it from current_revenue
+
+    # Check if provided columns exist in the DataFrame
+    for col in [land_value_col, improvement_value_col]:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in DataFrame")
+
+    if exemption_col is not None and exemption_col not in df.columns:
+        raise ValueError(f"Exemption column '{exemption_col}' not found in DataFrame")
+
+    if exemption_flag_col is not None and exemption_flag_col not in df.columns:
+        raise ValueError(f"Exemption flag column '{exemption_flag_col}' not found in DataFrame")
+
+    if percentage_cap_col is not None and percentage_cap_col not in df.columns:
+        raise ValueError(f"Percentage cap column '{percentage_cap_col}' not found in DataFrame")
+
+    if uniform_parcel_col is not None and uniform_parcel_col not in df.columns:
+        raise ValueError(f"Uniform parcel column '{uniform_parcel_col}' not found in DataFrame")
+        
+
+    # Make a copy to avoid modifying the original
+    result_df = df.copy()
+
+    # Ensure numeric values
+    result_df[land_value_col] = pd.to_numeric(result_df[land_value_col], errors='coerce').fillna(0)
+    result_df[improvement_value_col] = pd.to_numeric(result_df[improvement_value_col], errors='coerce').fillna(0)
+
+    if exemption_col is not None:
+        result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
+
+    if exemption_flag_col is not None:
+        result_df[exemption_flag_col] = pd.to_numeric(result_df[exemption_flag_col], errors='coerce').fillna(0)
+
+    if percentage_cap_col is not None:
+        result_df[percentage_cap_col] = pd.to_numeric(result_df[percentage_cap_col], errors='coerce').fillna(0)
+        print("Warning: percentage cap calculations are currently not implemented")
+
+    if uniform_parcel_col is not None:
+        result_df[uniform_parcel_col] = pd.to_numeric(result_df[uniform_parcel_col], errors='coerce').fillna(0)
+    
+
+    result_df['taxable_value'] = result_df.apply(calculate_taxable_value, axis=1, land_value_col=land_value_col,
+                                                    improvement_value_col=improvement_value_col, exemption_col=exemption_col, 
+                                                    exemption_flag_col=exemption_flag_col, uniform_parcel_col=uniform_parcel_col,
+                                                    apply_exemption_to_land=apply_exemption_to_land)
+
+    print(f"Total number of parcels: {len(result_df)}")
+
+    # Determine the taxable value for the LVT
+    if exemption_flag_col is None and uniform_parcel_col is None:
+        lvt_taxable_value = result_df['taxable_value']
+    elif exemption_flag_col is None:
+        lvt_taxable_value = result_df.query(f'{uniform_parcel_col} != 1')['taxable_value']
+    elif uniform_parcel_col is None:
+        lvt_taxable_value = result_df.query(f'{exemption_flag_col} != 1')['taxable_value']
+    else:
+        lvt_taxable_value = result_df.query(f'{exemption_flag_col} != 1 and {uniform_parcel_col} != 1')['taxable_value']
+
+    if verbose:
+        print(f'Current revenue: {current_revenue:,.2f}')
+
+    remaining_revenue = current_revenue
+
+    # Determine how much revenue the uniform parcels cover
+    if uniform_parcel_col is not None:
+        uniform_parcels = result_df.query(f'{uniform_parcel_col} == 1')['current_tax']
+
+        uniform_revenue = float((uniform_parcels).sum())
+
+        remaining_revenue -= uniform_revenue
+
+        if verbose:
+            print(f'Number of uniform parcels: {uniform_parcels.size}')
+            print(f'Revenue covered by uniform parcels: {uniform_revenue:,.2f}')
+
+    if exemption_flag_col is not None:
+        fully_exempt_parcels = result_df.query(f'{exemption_flag_col} == 1')['current_tax']
+
+        if verbose:
+            print(f'Number of fully exempt parcels: {fully_exempt_parcels.size}')
+
+    if verbose:
+        print(f'Revenue LVT needs to make: {remaining_revenue:,.2f}')
+        print(f"Total number of parcels we can tax with the LVT: {len(lvt_taxable_value)}")
+
+    total_lvt_taxable_value = float((lvt_taxable_value).sum())
+
+    # Prevent division by zero
+    if total_lvt_taxable_value <= 0:
+        raise ValueError("Total taxable value for the LVT is zero or negative, cannot calculate millage rate")
+
+    # Insert percentage cap here in the future
+
+    millage_rate = (remaining_revenue * 1000) / total_lvt_taxable_value
+
+    result_df['new_tax'] = result_df.apply(calculate_new_tax, axis=1, millage_rate=millage_rate, 
+                                                land_value_col=land_value_col, uniform_parcel_col=uniform_parcel_col)
+
+    if 'current_tax' in result_df.columns:
+        result_df['tax_change'] = result_df['new_tax'] - result_df['current_tax']
+        # Avoid division by zero
+        result_df['tax_change_pct'] = np.where(
+            result_df['current_tax'] > 0,
+            (result_df['tax_change'] / result_df['current_tax']) * 100,
+            0
+        )
+
+    result_df.head()
+
+    # Calculate total revenue with new system
+    new_total_revenue = float(result_df['new_tax'].sum())
+
+    print(f"Millage rate: {millage_rate:.4f}")
+    print(f"Total tax revenue: ${new_total_revenue:,.2f}")
+    print(f"Target revenue: ${current_revenue:,.2f}")
+    print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+
+    category_summary = calculate_category_tax_summary(result_df)
+    print_category_tax_summary(category_summary, f"Full LVT Tax Change by Property Category")
+
+    return millage_rate, new_total_revenue, result_df
+
+def calculate_taxable_value(row, land_value_col, improvement_value_col, exemption_col, exemption_flag_col, 
+                            uniform_parcel_col, apply_exemption_to_land):
+    land_value = row[land_value_col]
+    improvement_value = row[improvement_value_col]
+    
+    # If its fully exempt, return 0
+    if exemption_flag_col is not None:
+        if row[exemption_flag_col] == 1:
+            return 0
+
+    parcel_is_uniform = False
+
+    # Check if its uniform
+    if uniform_parcel_col is not None:
+        if row[uniform_parcel_col] == 1:
+            parcel_is_uniform = True
+
+    exemption_value = 0
+
+    # Check if it has an exemption on it
+    if exemption_col is not None:
+        exemption_value = row[exemption_col]
+
+    # If it uniform, the taxable value is the full property value, minus any exemptions
+    if parcel_is_uniform:
+        return np.maximum((land_value + improvement_value) - exemption_value, 0)
+    
+    # If it is not uniform, the taxable value is either the land value minus any exemptions 
+    # if we are applying the exemption directly to the land value, or the land value minus 
+    # the remainder from applying the exemption to the improvement value
+    else:
+        if apply_exemption_to_land:
+            return np.maximum(land_value - exemption_value, 0)
+        else:
+            remaining_exemption = np.maximum(exemption_value - improvement_value, 0)
+
+            return land_value - remaining_exemption
+
+def calculate_new_tax(row, millage_rate, land_value_col, uniform_parcel_col):
+    taxable_value = row['taxable_value']
+
+    # Just return the current tax of the property if its uniform
+    if uniform_parcel_col is not None:
+        if row[uniform_parcel_col] == 1:
+            return row['current_tax']
+
+    return taxable_value * (millage_rate / 1000)
