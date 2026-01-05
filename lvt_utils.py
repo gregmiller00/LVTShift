@@ -159,9 +159,9 @@ def print_category_tax_summary(
     if all(col in display_df.columns for col in display_cols):
         display_df = display_df[display_cols]
         display_df.columns = [
-            'Category', 'Count', 'Total Tax Change ($)', 
-            'Total Change (%)', 'Mean Change ($)', 'Median Change ($)',
-            'Avg % Change', 'Median % Change',
+            'Category', 'Count', 'Total Tax Δ ($)', 
+            'Total Δ (%)', 'Mean Δ ($)', 'Median Δ ($)',
+            'Avg % Δ', 'Median % Δ',
             f'% Parcels > +{pct_threshold:.0f}%', f'% Parcels < -{pct_threshold:.0f}%'
         ]
         # Sort the display rows by Count (largest to smallest)
@@ -173,14 +173,14 @@ def print_category_tax_summary(
     numeric_summary = summary_df.select_dtypes(include=[np.number])
     print(f"\nOVERALL SUMMARY:")
     print(f"Total Properties: {summary_df['property_count'].sum():,}")
-    print(f"Total Tax Change: ${summary_df['total_tax_change_dollars'].sum():,.0f}")
-    print(f"Net Revenue Change: ${summary_df['total_new_tax'].sum() - summary_df['total_current_tax'].sum():,.0f}")
+    print(f"Total Tax Δ: ${summary_df['total_tax_change_dollars'].sum():,.0f}")
+    print(f"Net Revenue Δ: ${summary_df['total_new_tax'].sum() - summary_df['total_current_tax'].sum():,.0f}")
     # Print overall mean and median percent change
     if 'mean_tax_change_pct' in summary_df.columns and 'median_tax_change_pct' in summary_df.columns:
         overall_mean_pct = summary_df['mean_tax_change_pct'].mean()
         overall_median_pct = summary_df['median_tax_change_pct'].median()
-        print(f"Average Percent Change (mean of means): {overall_mean_pct:.2f}%")
-        print(f"Median Percent Change (median of medians): {overall_median_pct:.2f}%")
+        print(f"Average Percent Δ (mean of means): {overall_mean_pct:.2f}%")
+        print(f"Median Percent Δ (median of medians): {overall_median_pct:.2f}%")
     # Print overall percent of parcels above and below threshold
     if 'pct_increase_gt_threshold' in summary_df.columns and 'pct_decrease_gt_threshold' in summary_df.columns:
         total_count = summary_df['property_count'].sum()
@@ -189,7 +189,7 @@ def print_category_tax_summary(
         print(f"Percent of ALL parcels with tax increase > +{pct_threshold:.0f}%: {100 * gt_count / total_count:.2f}%")
         print(f"Percent of ALL parcels with tax decrease < -{pct_threshold:.0f}%: {100 * lt_count / total_count:.2f}%")
 
-def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col: str, exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None, percentage_cap_col: Optional[str] = None, second_millage_rate_col: Optional[str] = None) -> Tuple[float, float, pd.DataFrame]:
+def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col: str, exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None, percentage_cap_col: Optional[str] = None, second_millage_rate_col: Optional[str] = None, verbose: bool = False) -> Tuple[float, float, pd.DataFrame]:
     """
     Calculate current property tax based on tax value and millage rate.
     
@@ -209,6 +209,8 @@ def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col
         Column name for percentage cap (maximum tax as percentage of property value)
     second_millage_rate_col : str, optional
         Column name for secondary millage rate (must be less than primary millage rate)
+    verbose : bool, optional
+        Whether to print verbose information (default False)
         
     Returns:
     --------
@@ -293,16 +295,18 @@ def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col
         result_df['second_tax'] = result_df['current_tax'] * (result_df[second_millage_rate_col] / result_df[millage_rate_col])
         result_df['second_tax'] = result_df['second_tax'].fillna(0)
         second_revenue = float(result_df['second_tax'].sum())
-        print(f"Total second tax revenue: ${second_revenue:,.2f}")
+        if verbose:
+            print(f"Total second tax revenue: ${second_revenue:,.2f}")
     
-    print(f"Total current tax revenue: ${total_revenue:,.2f}")
+    if verbose:
+        print(f"Total current tax revenue: ${total_revenue:,.2f}")
     
     return total_revenue, second_revenue, result_df
 
 def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
                          current_revenue: float, land_improvement_ratio: float = 3, 
                          exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
-                         percentage_cap_col: Optional[str] = None) -> Tuple[float, float, float, pd.DataFrame]:
+                         percentage_cap_col: Optional[str] = None, verbose: bool = False) -> Tuple[float, float, float, pd.DataFrame]:
     """
     Model a split-rate property tax where land is taxed at a higher rate than improvements.
     
@@ -324,6 +328,8 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         Column name for exemption flag (1 for exempt, 0 for not exempt)
     percentage_cap_col : str, optional
         Column name for percentage cap (maximum tax as percentage of property value)
+    verbose : bool, optional
+        Whether to print verbose information (default False)
         
     Returns:
     --------
@@ -494,16 +500,13 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
             0
         )
     
-    print(f"Split-rate tax model (Land:Improvement = {land_improvement_ratio}:1)")
-    print(f"Land millage rate: {land_millage:.4f}")
-    print(f"Improvement millage rate: {improvement_millage:.4f}")
-    print(f"Total tax revenue: ${new_total_revenue:,.2f}")
-    print(f"Target revenue: ${current_revenue:,.2f}")
-    print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
-    
-    # Print category summary if category column exists
-    category_summary = calculate_category_tax_summary(result_df)
-    print_category_tax_summary(category_summary, "Split-Rate Tax Change by Property Category")
+    if verbose:
+        print(f"Split-rate tax model (Land:Improvement = {land_improvement_ratio}:1)")
+        print(f"Land millage rate: {land_millage:.4f}")
+        print(f"Improvement millage rate: {improvement_millage:.4f}")
+        print(f"Total tax revenue: ${new_total_revenue:,.2f}")
+        print(f"Target revenue: ${current_revenue:,.2f}")
+        print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
     
     return land_millage, improvement_millage, new_total_revenue, result_df
 
