@@ -503,7 +503,7 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
     
     # Print category summary if category column exists
     category_summary = calculate_category_tax_summary(result_df)
-    print_category_tax_summary(category_summary, "Split-Rate Tax Change by Property Category")
+    #print_category_tax_summary(category_summary, "Split-Rate Tax Change by Property Category")
     
     return land_millage, improvement_millage, new_total_revenue, result_df
 
@@ -687,7 +687,7 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
     
     # Print category summary if category column exists
     category_summary = calculate_category_tax_summary(result_df)
-    print_category_tax_summary(category_summary, f"Building Abatement ({abatement_percentage*100:.1f}%) Tax Change by Property Category")
+    #print_category_tax_summary(category_summary, f"Building Abatement ({abatement_percentage*100:.1f}%) Tax Change by Property Category")
     
     return millage_rate, new_total_revenue, result_df
 
