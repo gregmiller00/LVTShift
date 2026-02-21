@@ -29,7 +29,15 @@ policy_analysis.py → Identify vacant land, parking lots, development barriers
 viz.py             → Scatter plots, quintile analysis, demographic charts
 ```
 
-**Data flow**: Fetch parcels (cloud_utils) → calculate current tax → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → analyze equity impacts (viz/policy_analysis)
+**Data flow**: Fetch parcels (cloud_utils) → calculate current tax → collapse condos by PlatID with imputed land values → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → analyze equity impacts (viz/policy_analysis)
+
+### Condo Collapse
+
+Ramsey County assigns condo units token land values ($1,000/unit), not real assessments. Before modeling, condos are collapsed by `PlatID` into buildings:
+- **Sum**: EMVTotal1, TaxCapacity, TotalTax1
+- **Impute**: EMVLand1/EMVBuilding1 from neighborhood (District Council) median IR of non-condo parcels
+- Geometries are unioned via `collapse_geometries()`
+- Both collapse options (A: first-value, B: imputed IR) are in the code; Option B is used downstream
 
 ### Key Design Patterns
 
@@ -73,7 +81,11 @@ Located in `examples/`. Each follows a pattern:
 6. Visualize by category (bar charts, butterfly charts, scatter plots)
 7. Merge Census data for equity analysis (income/minority quintiles)
 
-Active work is in `st_paul_v2.ipynb` (Tax Capacity approach at 4:1 ratio). Data stored in `examples/data/st_paul/` as geoparquet files.
+Active notebooks:
+- `st_paul_v2.ipynb` — City tax portion only (~36%), Tax Capacity approach at 4:1 ratio
+- `st_paul_full_bill.ipynb` — HF 1342 full tax bill, same TC split-rate at 4:1, includes TIF analysis
+
+Both notebooks collapse condo units into buildings (Step 3b) before modeling. Data stored in `examples/data/st_paul/` as geoparquet files.
 
 ## Code Style
 
