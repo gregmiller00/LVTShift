@@ -2,6 +2,51 @@
 
 A step-by-step questionnaire and reference for modeling Land Value Tax (LVT) shift or Universal Building Exemption (UBE) scenarios for a new city using this codebase.
 
+## Core Goal
+
+The goal of every new city notebook is twofold:
+
+1. **Properly simulate the current property tax system as it exists today.**
+2. **Properly simulate the proposed reform while changing as little else as possible.**
+
+This guide assumes a conservative policy-design principle:
+
+- **Do not change the current property tax structure unless the user explicitly wants that change.**
+- Existing assessment ratios, taxable-value definitions, exemptions, abatements, credits, circuit breakers, and caps should generally remain in place.
+- The more pieces of the current system you remove or redesign, the less realistic the model becomes and the less likely the policy is to reflect what could actually pass.
+
+In other words: the default LVT exercise is **not** "replace the whole property tax code." The default is **"hold the current structure constant, then shift the rate structure toward land."**
+
+## Required Workflow
+
+Before building a new notebook, explicitly work through these two stages:
+
+### Stage A — Reconstruct the current system
+
+- Identify the actual tax base used by the jurisdiction.
+- Determine whether values are market value, assessed value, taxable value, tax capacity, or some other state-specific construct.
+- Confirm the order of operations:
+  1. Assessment ratio or state equalization, if any
+  2. Exemptions / abatements / exclusions
+  3. Tax rate application
+  4. Credits / rollbacks / circuit breakers
+  5. Floors and caps, including "tax cannot go below zero"
+- Validate the modeled current revenue against a known city or levy benchmark whenever possible.
+
+### Stage B — Design the reform with the user
+
+There are many legitimate policy choices, and the notebook should not silently choose among them. The analyst or AI system should ask the user what policy they want to simulate and explain the main options.
+
+At minimum, ask:
+
+- Is the policy city levy only, or the full levy stack?
+- Is the reform a split-rate tax, a building exemption, or another land-focused design?
+- Should existing exemptions and abatements remain in place? Default: **yes**
+- Should existing credits / rollbacks remain in place after tax is computed? Default: **yes**
+- Are any current features intentionally being changed by the proposal, or should everything besides the land/building rate structure stay the same? Default: **keep everything else the same**
+
+If the answer is not explicit, default to preserving the current system and note that assumption in the notebook markdown.
+
 Answer the questions in each section in order. Your answers will map directly to the code decisions you need to make in your notebook.
 
 ---
@@ -26,6 +71,20 @@ Answer the questions in each section in order. Your answers will map directly to
 ## Section 1 — Data Source
 
 **Goal:** Locate the parcel-level property assessment data for the city.
+
+### Q1.0 — What policy design assumptions must be confirmed with the user before modeling?
+
+Before touching code, write down the policy choices the user has made and the ones still unresolved.
+
+```
+Policy scope confirmed with user: ___________________________________
+Current structure preserved unless otherwise specified?  [ ] Yes  [ ] No
+Keep existing exemptions / abatements?                   [ ] Yes  [ ] No
+Keep existing credits / rollbacks?                       [ ] Yes  [ ] No
+Any intentional departures from current law?             ___________________________________
+```
+
+> **Instruction for analysts / AI systems:** Do not guess silently here. Summarize the available policy options, ask the user which version they want, and record the answer in the notebook markdown before modeling.
 
 ### Q1.1 — What is the primary data portal for this city's parcel data?
 
@@ -349,7 +408,21 @@ Partial exemption column:                    ___
 
 The standard approach in this codebase: partial exemptions reduce improvement value first, then land value (see `_compute_adjusted_values()` in `policy_analysis.py`).
 
-### Q5.5 — Are there special tax regimes to exclude?
+### Q5.5 — Are there post-tax credits, rollbacks, or circuit breakers?
+
+This question is separate from exemptions. Many jurisdictions compute tax on taxable value first and then reduce the bill through credits or rollbacks.
+
+```
+Are there post-tax credits / rollbacks?   [ ] Yes  [ ] No  [ ] Unknown
+Credit type(s):                            ___________________________________
+Credit amount column:                      ___  (or None)
+Credit rate/share column:                  ___  (or None)
+Applied before or after tax calculation?   [ ] Before  [ ] After  [ ] Need to verify
+```
+
+> **Default modeling rule:** If the current system applies credits after tax is computed, the reform model should also apply them after the new tax is computed, unless the user explicitly wants to model a change to those credits.
+
+### Q5.6 — Are there special tax regimes to exclude?
 
 ```
 Special tax regimes or geographic exclusions: ___________________________________
@@ -565,6 +638,28 @@ Are there multiple rates (e.g., homestead vs. non-homestead)?  [ ] No  [ ] Yes: 
 
 **Goal:** Accurately compute the current property tax bill for each parcel. This becomes the baseline for the policy model.
 
+### Q8.0 — What is the current tax formula, in order?
+
+Write the jurisdiction's current tax formula in plain language before coding it.
+
+```
+Step 1: _____________________________________________________________
+Step 2: _____________________________________________________________
+Step 3: _____________________________________________________________
+Step 4: _____________________________________________________________
+Step 5: _____________________________________________________________
+```
+
+Example:
+
+1. Start from market value
+2. Apply statewide assessment ratio
+3. Subtract exemptions / abatements
+4. Apply the relevant levy millage
+5. Apply rollbacks / credits
+
+If the jurisdiction provides already-computed taxable land / building values, use those directly rather than reconstructing earlier steps unnecessarily.
+
 ### Q8.1 — What is the tax base?
 
 | Approach | Formula | When to use |
@@ -590,14 +685,25 @@ current_revenue, second_revenue, df = calculate_current_tax(
     df=df,
     tax_value_col='your_total_value_col',   # e.g., 'CURRFMV', 'appraised_val_total'
     millage_rate_col='millage_rate',
-    exemption_col='your_exemption_col',     # or None
+    exemption_col='your_exemption_col',     # relief applied before tax, or None
     exemption_flag_col='full_exmp',         # or None
+    land_value_col='your_taxable_land_col',         # preferred when available
+    improvement_value_col='your_taxable_impr_col',  # preferred when available
+    credit_col='your_credit_amount_col',            # post-tax credit, or None
+    credit_rate_col='your_credit_rate_col',         # post-tax credit share, or None
 )
 
 print(f"Modeled current revenue: ${current_revenue:,.0f}")
 ```
 
 The function returns `(total_revenue, second_revenue, updated_df)` where `updated_df` has a `current_tax` column added.
+
+**Preferred approach:**
+
+- If the dataset has already-computed taxable land and taxable improvement values, use those for the current-tax reconstruction.
+- If the dataset only has gross land/building values plus relief amounts, reconstruct taxable values by applying relief in the documented legal order.
+- If the system has post-tax credits, apply them after tax is computed.
+- In all cases, clip at zero so no parcel has negative taxable value or negative tax.
 
 ### Q8.3 — Validate against known revenue figures
 
@@ -621,6 +727,20 @@ A match within ~5% is acceptable. Large discrepancies typically mean:
 
 **Goal:** Model the impact of a policy shift on every parcel's tax bill, maintaining revenue neutrality.
 
+### Q9.0 — Which parts of the current system remain unchanged in the reform?
+
+This should be answered explicitly before running any scenario.
+
+```
+Assessment ratio remains unchanged?         [ ] Yes  [ ] No
+Existing exemptions remain unchanged?       [ ] Yes  [ ] No
+Existing abatements remain unchanged?       [ ] Yes  [ ] No
+Existing credits / rollbacks unchanged?     [ ] Yes  [ ] No
+Any other current-law feature preserved?    ___________________________________
+```
+
+> **Default rule for new notebooks:** Preserve all current-law features except for the land/building rate structure being tested.
+
 ### Q9.1 — Which policy are you modeling?
 
 Two distinct policy types are supported:
@@ -642,6 +762,8 @@ Policy type:  [ ] Split-rate LVT   [ ] Building exemption (UBE)   [ ] Both
 
 Land is taxed at a rate that is `land_improvement_ratio` times the improvement rate. Both rates are solved simultaneously to hit the revenue target.
 
+**Default implementation rule:** Apply all existing exemptions / abatements first, using the current-law allocation order, then compute the split-rate tax, then apply any credits / rollbacks that currently occur post-tax. Do not remove those features unless the user explicitly asks for that policy change.
+
 **Example scenarios:**
 
 | Ratio | Meaning |
@@ -659,8 +781,10 @@ land_millage, improvement_millage, new_revenue, df = model_split_rate_tax(
     improvement_value_col='your_impr_col',
     current_revenue=current_revenue,       # from calculate_current_tax()
     land_improvement_ratio=2,              # choose your ratio
-    exemption_col=None,                    # or 'your_exemption_col'
-    exemption_flag_col=None,               # or 'full_exmp'
+    exemption_col='your_exemption_col',    # existing relief applied before tax
+    exemption_flag_col='full_exmp',        # or None
+    credit_col='your_credit_amount_col',   # existing post-tax credit, or None
+    credit_rate_col='your_credit_rate_col',# existing post-tax credit share, or None
 )
 
 print(f"Land millage:        {land_millage:.4f}")
@@ -671,6 +795,7 @@ print(f"Revenue:             ${new_revenue:,.0f}")
 The function adds to `df`:
 - `land_tax` — tax from land portion
 - `improvement_tax` — tax from improvement portion
+- `new_tax_before_credits` — tax before post-tax credits
 - `new_tax` — total new tax
 - `tax_change` — `new_tax - current_tax`
 - `tax_change_pct` — percentage change
@@ -698,26 +823,50 @@ Statutory tax cap?  [ ] Yes — cap value: ___   [ ] No
 
 A building exemption exempts some or all of the improvement value from taxation. The remaining taxable base (all land + un-exempted improvements) is then taxed at a single, higher rate to keep revenue neutral. This is not a split-rate system — one rate applies to whatever is left in the tax base.
 
+Just like the split-rate model, the default sequence should be:
+
+1. Start from the current-law land and improvement values
+2. Apply existing exemptions / abatements first
+3. Apply the reform's building exemption
+4. Compute the new tax
+5. Apply existing post-tax credits / rollbacks
+6. Clip at zero
+
 **Two forms:**
 
 **Form A — Percentage exemption** (e.g., "exempt 50% of building value")
 ```python
 exemption_pct = 0.50  # 50% building exemption (use 1.0 for full/100% UBE)
 
-# Compute new taxable base per parcel
-df['new_taxable_base'] = (
-    df['land_value'] + (1 - exemption_pct) * df['improvement_value']
-)
-# Subtract any existing partial exemptions
+# Start from current-law taxable components, or compute them first
+df['taxable_land_value'] = df['land_value']
+df['taxable_improvement_value'] = df['improvement_value']
+
+# Apply existing relief first if needed
 if 'existing_exemptions' in df.columns:
-    df['new_taxable_base'] = (df['new_taxable_base'] - df['existing_exemptions']).clip(lower=0)
+    original_improvement = df['taxable_improvement_value'].copy()
+    df['taxable_improvement_value'] = (df['taxable_improvement_value'] - df['existing_exemptions']).clip(lower=0)
+    remaining_relief = (df['existing_exemptions'] - original_improvement).clip(lower=0)
+    df['taxable_land_value'] = (df['taxable_land_value'] - remaining_relief).clip(lower=0)
+
+# Then apply the proposed building exemption
+df['new_taxable_base'] = (
+    df['taxable_land_value'] + (1 - exemption_pct) * df['taxable_improvement_value']
+).clip(lower=0)
 
 # Revenue-neutral rate
 total_new_base = df['new_taxable_base'].sum()
 new_millage = (current_revenue * 1000) / total_new_base
 
 # New tax per parcel
-df['new_tax'] = df['new_taxable_base'] * new_millage / 1000
+df['new_tax_before_credits'] = (df['new_taxable_base'] * new_millage / 1000).clip(lower=0)
+
+# Apply post-tax credits if they exist
+if 'existing_credit_amount' in df.columns:
+    df['new_tax'] = (df['new_tax_before_credits'] - df['existing_credit_amount']).clip(lower=0)
+else:
+    df['new_tax'] = df['new_tax_before_credits']
+
 df['tax_change'] = df['new_tax'] - df['current_tax']
 df['tax_change_pct'] = (df['tax_change'] / df['current_tax'] * 100).where(
     df['current_tax'] > 0, 0
@@ -733,17 +882,29 @@ print(f"New total revenue: ${df['new_tax'].sum():,.0f}")
 ```python
 exemption_base = 50_000  # exempt first $50k of improvement value
 
-df['new_taxable_base'] = (
-    df['land_value'] + (df['improvement_value'] - exemption_base).clip(lower=0)
-)
-# Subtract any existing partial exemptions
+# Start from current-law taxable components, or compute them first
+df['taxable_land_value'] = df['land_value']
+df['taxable_improvement_value'] = df['improvement_value']
+
+# Apply existing relief first if needed
 if 'existing_exemptions' in df.columns:
-    df['new_taxable_base'] = (df['new_taxable_base'] - df['existing_exemptions']).clip(lower=0)
+    original_improvement = df['taxable_improvement_value'].copy()
+    df['taxable_improvement_value'] = (df['taxable_improvement_value'] - df['existing_exemptions']).clip(lower=0)
+    remaining_relief = (df['existing_exemptions'] - original_improvement).clip(lower=0)
+    df['taxable_land_value'] = (df['taxable_land_value'] - remaining_relief).clip(lower=0)
+
+df['new_taxable_base'] = (
+    df['taxable_land_value'] + (df['taxable_improvement_value'] - exemption_base).clip(lower=0)
+).clip(lower=0)
 
 total_new_base = df['new_taxable_base'].sum()
 new_millage = (current_revenue * 1000) / total_new_base
 
-df['new_tax'] = df['new_taxable_base'] * new_millage / 1000
+df['new_tax_before_credits'] = (df['new_taxable_base'] * new_millage / 1000).clip(lower=0)
+if 'existing_credit_amount' in df.columns:
+    df['new_tax'] = (df['new_tax_before_credits'] - df['existing_credit_amount']).clip(lower=0)
+else:
+    df['new_tax'] = df['new_tax_before_credits']
 df['tax_change'] = df['new_tax'] - df['current_tax']
 df['tax_change_pct'] = (df['tax_change'] / df['current_tax'] * 100).where(
     df['current_tax'] > 0, 0
@@ -867,11 +1028,15 @@ The best reference for what a finished notebook should look like are the existin
 - [ ] Row count after filtering is plausible (cross-check against assessor records)
 - [ ] Total land value and total improvement value are plausible for the city's size
 - [ ] Modeled `current_revenue` matches known city property tax levy (within ~5%)
+- [ ] Current tax formula is written out in notebook markdown in the correct legal order
 - [ ] `PROPERTY_CATEGORY` has no null values; distribution looks reasonable
 - [ ] No fully-exempt parcels remain in `df_model`
 
 ### Policy model outputs
 - [ ] `current_tax` column computed and validated
+- [ ] Existing exemptions / abatements preserved unless user explicitly changed them
+- [ ] Existing credits / rollbacks preserved unless user explicitly changed them
+- [ ] No parcel has negative taxable value, `current_tax`, or `new_tax`
 - [ ] `new_tax` column computed
 - [ ] `tax_change` = `new_tax - current_tax`
 - [ ] `tax_change_pct` = `(tax_change / current_tax) * 100`
