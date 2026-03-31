@@ -563,6 +563,139 @@ def get_mapserver_data_with_geometry_filtered(dataset_name, base_url, layer_id=0
         print(f"Unexpected error: {e}")
         return None
 
+def get_mapserver_data_with_geometry_pa(dataset_name, base_url, layer_id=0, paginate=True, verbose=True):
+    """Get all features from a MapServer service for Pennsylvania (uses PA State Plane North projection)"""
+    url = f"{base_url}/{dataset_name}/MapServer/{layer_id}/query"
+    
+    # First, get the count of all features
+    count_params = {
+        'f': 'json',
+        'where': '1=1',
+        'returnCountOnly': 'true'
+    }
+    
+    try:
+        if paginate:
+            count_response = requests.get(url, params=count_params)
+            count_response.raise_for_status()
+            total_records = count_response.json().get('count', 0)
+            if verbose:
+                print(f"Total records in {dataset_name}: {total_records}")
+        else:
+            total_records = 1000
+        
+        if total_records == 0:
+            if verbose:
+                print("No records found")
+            return None
+        
+        # Now fetch the actual data in chunks
+        all_features = []
+        offset = 0
+        chunk_size = 1000  # MapServer typically limits to 1000-2000 records per request
+        
+        while offset < total_records:
+            params = {
+                'f': 'json',
+                'where': '1=1',
+                'outFields': '*',
+                'returnGeometry': 'true',
+                'geometryPrecision': 6,
+                'resultOffset': offset,
+                'resultRecordCount': chunk_size
+            }
+            
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'features' in data and data['features']:
+                # Convert ESRI features to GeoDataFrame format
+                for feature in data['features']:
+                    # Extract attributes
+                    attributes = feature['attributes']
+                    
+                    # Handle geometry - check if it exists and has the expected structure
+                    geometry = None
+                    if 'geometry' in feature and feature['geometry']:
+                        geom_data = feature['geometry']
+                        if 'rings' in geom_data and geom_data['rings']:
+                            try:
+                                # Take the first ring (exterior ring)
+                                ring = geom_data['rings'][0]
+                                # Create Shapely polygon
+                                geometry = Polygon(ring)
+                            except Exception as e:
+                                if verbose:
+                                    print(f"Warning: Could not process geometry for feature: {e}")
+                                geometry = None
+                        elif 'x' in geom_data and 'y' in geom_data:
+                            # Point geometry
+                            from shapely.geometry import Point
+                            try:
+                                geometry = Point(geom_data['x'], geom_data['y'])
+                            except Exception as e:
+                                if verbose:
+                                    print(f"Warning: Could not process point geometry: {e}")
+                                geometry = None
+                    
+                    # Combine attributes and geometry
+                    attributes['geometry'] = geometry
+                    all_features.append(attributes)
+                
+                if verbose:
+                    print(f"Fetched records {offset} to {offset + len(data['features'])}")
+                
+                num_features = len(data['features'])
+                if not paginate or num_features < chunk_size:
+                    break
+                offset += num_features
+            else:
+                if verbose:
+                    print(f"No features found in response for {dataset_name}")
+                break
+        
+        if all_features:
+            # Pennsylvania State Plane North uses EPSG:2271 (NAD83) or EPSG:2272 (NAD83 HARN)
+            # Based on the metadata, this appears to be NAD83, so using EPSG:2271
+            try:
+                gdf = gpd.GeoDataFrame(all_features, crs='EPSG:2271')
+                
+                # Filter out features without geometry if needed
+                valid_geom_count = gdf['geometry'].notna().sum()
+                if verbose:
+                    print(f"Features with valid geometry: {valid_geom_count} out of {len(gdf)}")
+                
+                if valid_geom_count > 0:
+                    # Convert to WGS84 for compatibility
+                    gdf = gdf.to_crs('EPSG:4326')
+                    if verbose:
+                        print(f"Successfully loaded {len(gdf)} features")
+                        b = gdf.total_bounds
+                        print("Total bounds:", b)
+                    return gdf
+                else:
+                    if verbose:
+                        print("No features with valid geometry found")
+                    # Return as regular DataFrame if no geometry
+                    return pd.DataFrame(all_features)
+                    
+            except Exception as e:
+                if verbose:
+                    print(f"Error creating GeoDataFrame: {e}")
+                    print("Returning as regular DataFrame")
+                return pd.DataFrame(all_features)
+        
+        return None
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data from {dataset_name}: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return None
+
+
 def explore_cities_in_dataset(dataset_name, base_url, layer_id=0, max_features=1000):
     """Explore what cities are available in the dataset"""
     url = f"{base_url}/{dataset_name}/MapServer/{layer_id}/query"
