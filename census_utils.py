@@ -164,6 +164,8 @@ def get_census_blockgroups_shapefile_chunked(fips_code: str, max_retries: int = 
                 if 'features' in geojson_data and geojson_data['features']:
                     # Convert to GeoDataFrame
                     tract_gdf = gpd.GeoDataFrame.from_features(geojson_data['features'])
+                    if tract_gdf.crs is None:
+                        tract_gdf = tract_gdf.set_crs("EPSG:4326")
                     all_block_groups.append(tract_gdf)
                     
                 print(f"✅ Tract {tract} ({i+1}/{len(tract_numbers)}): {len(geojson_data.get('features', []))} block groups")
@@ -186,7 +188,11 @@ def get_census_blockgroups_shapefile_chunked(fips_code: str, max_retries: int = 
     
     # Combine all block groups
     print(f"🔗 Combining block groups from {len(all_block_groups)} tracts...")
-    combined_gdf = gpd.pd.concat(all_block_groups, ignore_index=True)
+    combined_gdf = gpd.GeoDataFrame(
+        pd.concat(all_block_groups, ignore_index=True),
+        geometry="geometry",
+        crs=all_block_groups[0].crs if all_block_groups else "EPSG:4326",
+    )
     
     # Create standardized GEOID components
     combined_gdf['state_fips'] = combined_gdf['STATE']
@@ -268,6 +274,8 @@ def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
         
         # Convert to GeoDataFrame
         gdf = gpd.GeoDataFrame.from_features(geojson_data['features'])
+        if gdf.crs is None:
+            gdf = gdf.set_crs("EPSG:4326")
         
         # Create standardized GEOID components
         gdf['state_fips'] = gdf['STATE']
@@ -384,6 +392,11 @@ def get_census_data_with_boundaries(
     
     # Drop duplicate columns that might have been created with the _census suffix
     census_boundaries = census_boundaries.loc[:, ~census_boundaries.columns.str.endswith('_census')]
+    census_boundaries = gpd.GeoDataFrame(
+        census_boundaries,
+        geometry='geometry',
+        crs=census_boundaries.crs or "EPSG:4326"
+    )
     
     return census_data, census_boundaries
 

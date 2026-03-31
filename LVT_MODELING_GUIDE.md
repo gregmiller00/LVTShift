@@ -984,16 +984,19 @@ ACS variables (typical): median_income, minority_pct, black_pct
 ### Q10.3 — Quintile analysis by income
 
 ```python
-from viz import create_quintile_summary, plot_quintile_analysis
+from viz import create_quintile_summary, plot_upside_down_quintile_bars
 
 quintile_summary = create_quintile_summary(
-    df=bg_summary,
+    df=df_geo,
     group_col='median_income',
     value_col='median_income',
     tax_change_col='tax_change',
     tax_change_pct_col='tax_change_pct',
 )
-plot_quintile_analysis(quintile_summary, title="Tax Impact by Income Quintile")
+plot_upside_down_quintile_bars(
+    quintile_summary,
+    title="Median Tax Change by Neighborhood Median Income (Excl. Vacant Land)",
+)
 ```
 
 ### Q10.4 — Vacant land and parking lot analysis
@@ -1022,7 +1025,10 @@ print_vacant_land_summary(vacant)
 
 Use this as a final checklist before the notebook is complete.
 
-The best reference for what a finished notebook should look like are the existing examples in `examples/`. In particular, `baltimore.ipynb`, `rochester.ipynb`, and `st_paul_v2.ipynb` have the most complete visualization sections. Study those before building charts for a new city.
+The best references for finished notebooks are:
+- **`spokane.ipynb`** — canonical property category chart (Chart 1 above)
+- **`cleveland.ipynb`** — canonical census progressivity charts (Chart 2 above)
+- **`charlottesville.ipynb`** — most recent notebook implementing both styles together, plus choropleth maps and IR scatter plots
 
 ### Data validation
 - [ ] Row count after filtering is plausible (cross-check against assessor records)
@@ -1043,25 +1049,137 @@ The best reference for what a finished notebook should look like are the existin
 - [ ] Revenue neutrality confirmed: `new_tax.sum() ≈ current_revenue`
 - [ ] New rate(s) printed (land millage + improvement millage for split-rate; single new millage for building exemption)
 
-### Key charts (see existing notebooks for code)
+### Key charts
 
-**1. Revenue shift by property category — total dollars**
-A horizontal bar chart showing the aggregate dollar change in tax burden for each property category. This answers: "Which types of properties pay more and which pay less in total?" Use `calculate_category_tax_summary()` output.
+---
 
-**2. Revenue shift by property category — median % change per parcel**
-A bar chart showing the median percentage tax change across parcels within each category. This answers: "What does the typical property of each type experience?" Separates outliers from the central tendency.
+#### Chart 1 — Property category impact (Spokane style)
 
-**3. Progressivity chart — tax change % by neighborhood income quintile**
-A line or bar chart of mean/median tax change percentage grouped by census block group income quintile. This answers: "Is this policy progressive (lower-income areas see lower increases or larger decreases) or regressive?" Use `create_quintile_summary()` and `plot_quintile_analysis()`.
+**Reference notebook:** `spokane.ipynb`
 
-**4. Scatter plot — neighborhood income vs. mean tax change %**
-One point per block group, x-axis = median income, y-axis = mean parcel tax change %. Show two versions: all properties, and non-vacant properties only. Use `plot_comparison()` from `viz.py`.
+A single horizontal bar chart combining the median % change, median dollar change, parcel count, and aggregate net dollar change into one clean exhibit. This is the primary policy communication chart.
 
-**5. Choropleth map — tax change % by parcel**
-A geographic map colored by `tax_change_pct`. Useful for communicating spatial patterns to non-technical audiences. Use `create_map_visualization()` from `viz.py`.
+**Format spec:**
+- One bar per `PROPERTY_CATEGORY`. Filter to categories with ≥ 10 parcels.
+- Sort ascending by `median_tax_change_pct` (largest decreases at bottom).
+- Bars go right (positive = tax increase, dark red `#8B0000`) or left (negative = tax decrease, green `#228B22`). No axis lines or tick marks — remove all spines.
+- **Text labels positioned outside the bar tip** (right of bar for increases, left for decreases):
+  - Line 1: Category name, bold, 14pt Arial
+  - Line 2: `Median: $XXX, +X.X%` (combined dollar + percent), bold, 12pt Arial
+  - Line 3: `X,XXX parcels`, grey `#888`, 11pt Arial
+- **"Net Change" right column:** a fixed right-side column (offset `max_abs + 120`) showing the aggregate dollar change for each category (sum of `tax_change` across all parcels in that category). Column header "Net Change" in bold 15pt at the top.
+- Figure width: 17 inches. Height: `n_categories * 0.8 + 1.2` inches.
+- x-axis limits: `(-right_col_x, right_col_x + 60)` to give space for the right column.
 
-**6. Improvement ratio analysis**
-Bar chart or table showing how much of the city's land value sits in parcels with low improvement ratios (i.e., underutilized land). Use `analyze_land_by_improvement_share()` from `policy_analysis.py`.
+```python
+# Key column references from calculate_category_tax_summary():
+#   median_tax_change_pct   → bar length and label
+#   median_tax_change       → dollar label
+#   property_count          → parcel count label
+#   total_tax_change_dollars → net change right column
+```
+
+**Shared function to use:**
+
+```python
+from viz import create_spokane_property_category_chart
+
+create_spokane_property_category_chart(
+    summary_df=category_summary,
+    title="City 2:1 Split-Rate Tax Impact by Property Category",
+    min_count=10,
+)
+```
+
+---
+
+#### Chart 1b — ±10% threshold chart (Spokane style)
+
+**Reference notebook:** `spokane.ipynb`
+
+This is the companion chart to Chart 1. It shows the share of parcels in each category with tax decreases greater than 10% and tax increases greater than 10%.
+
+**Shared function to use:**
+
+```python
+from viz import create_threshold_change_chart
+
+create_threshold_change_chart(
+    summary_df=category_summary,
+    title="Share of Parcels with Tax Changes Greater than 10%",
+    threshold=10.0,
+    min_count=10,
+)
+```
+
+---
+
+#### Chart 2 — Census progressivity (Cleveland style)
+
+**Reference notebook:** `cleveland.ipynb`
+
+Four separate upside-down bar charts (bars grow downward) showing the median parcel-level tax change % across census block group quintiles. Run these at the **parcel level** using `df_geo` (the spatially joined result from `match_to_census_blockgroups()`), not the block-group aggregated `bg_summary`.
+
+**Four charts required, always in this order:**
+
+| # | Filter | Demographic axis | Title |
+|---|--------|-----------------|-------|
+| 1 | Excl. Vacant Land | Median income quintile | "Median Tax Change by Neighborhood Median Income (Excl. Vacant Land)" |
+| 2 | Excl. Vacant Land | Minority share quintile | "Median Tax Change by Minority Percentage Quintile (Excl. Vacant Land)" |
+| 3 | Residential only | Median income quintile | "Median Tax Change by Neighborhood Median Income (Excl. Vacant Land, Residential Only)" |
+| 4 | Residential only | Minority share quintile | "Median Tax Change by Minority Percentage Quintile (Excl. Vacant Land, Residential Only)" |
+
+**"Residential only"** means parcels whose `PROPERTY_CATEGORY` is in:
+`["Single Family Residential", "Small Multi-Family (2-4 units)", "Large Multi-Family (5+ units)", "Other Residential"]`
+
+**Quintile construction:** call a parcel-level `create_quintile_summary(df, value_col)` that:
+- Groups parcels by `pd.qcut(value_col, 5)` into Q1–Q5 labels
+- Aggregates `median_tax_change_pct` (median of parcel-level `tax_change_pct` within each quintile)
+- Excludes zero/negative median incomes when the axis is `median_income`
+
+**Format spec for each upside-down chart:**
+- `figsize=(10, 6)`
+- Negative bars should extend downward from zero, and positive bars should extend upward if present; y-axis hidden.
+- Color: green shades for negative values, red shades for positive values, darker for larger magnitude.
+- Bar edges: `edgecolor="black"`, `width=0.7`.
+- Percentage label centered inside each bar, bold 13pt, black.
+- Quintile labels (Q1 Lowest … Q5 Highest) on the **top** x-axis (`ax.xaxis.set_ticks_position("top")`), bold.
+- No y-axis label, no x-axis label. Title in `ax.set_title(..., weight="bold", pad=30)`.
+- `sns.despine(left=True, right=True, top=True, bottom=True)`.
+
+**Shared function to use:**
+
+```python
+from viz import create_quintile_summary, plot_upside_down_quintile_bars
+
+income_summary = create_quintile_summary(
+    df=non_vacant_gdf,
+    group_col='median_income',
+    value_col='median_income',
+)
+plot_upside_down_quintile_bars(
+    income_summary,
+    title="Median Tax Change by Neighborhood Median Income (Excl. Vacant Land)",
+)
+```
+
+---
+
+#### Chart 3 — Multi-scenario comparison (optional, keep bespoke)
+
+A grouped bar chart comparing median tax change % across 2–4 key property categories for each scenario (2:1, 4:1, 10:1, full land-only). Useful for showing how scenario aggressiveness affects outcomes. No strict format requirement — match the style of `pittsburgh.ipynb` or `cleveland.ipynb`.
+
+---
+
+#### Chart 4 — Choropleth map (optional, keep bespoke)
+
+Two side-by-side maps: land value per parcel (YlOrRd) and 4:1 LVT tax change % (RdYlGn_r). Only render if geometry is available for ≥ 50% of taxable parcels. Cap color scales at the 95th percentile. Use `figsize=(18, 7)`, turn off axes with `set_axis_off()`.
+
+---
+
+#### Chart 5 — Improvement ratio (optional, keep bespoke)
+
+A histogram of improvement ratios by property category plus a scatter plot of IR vs. tax change %. Useful for explaining the mechanical driver of LVT impact. No strict format requirement.
 
 ### Equity narrative (complete in the notebook's markdown cells)
 - [ ] Is the shift progressive or regressive overall?

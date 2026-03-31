@@ -316,7 +316,7 @@ def plot_quintile_analysis(
     plt.ylabel('Mean Tax Change (%)')
     plt.title(title)
     plt.legend()
-    plt.grid(True, alpha=0.3)
+    ax.grid(False)
     plt.xticks(quintile_nums, [f"Q{i}" for i in quintile_nums])
     
     plt.tight_layout()
@@ -381,6 +381,358 @@ def create_property_category_chart(
     
     plt.tight_layout()
     plt.show()
+
+
+def create_spokane_property_category_chart(
+    summary_df: pd.DataFrame,
+    title: str = "Property Category Impact",
+    category_col: str = "PROPERTY_CATEGORY",
+    median_pct_col: str = "median_tax_change_pct",
+    median_dollar_col: str = "median_tax_change",
+    property_count_col: str = "property_count",
+    total_change_col: str = "total_tax_change_dollars",
+    min_count: int = 10,
+    right_col_pad: float = 120.0,
+    figsize_width: float = 17.0,
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Create the Spokane-style property category impact chart.
+
+    This combines median percent change, median dollar change, parcel counts,
+    and aggregate net change into a single horizontal-bar exhibit.
+    """
+    required = {category_col, median_pct_col, median_dollar_col, property_count_col}
+    missing = required - set(summary_df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns for property category chart: {sorted(missing)}")
+
+    plot_df = summary_df[summary_df[property_count_col] >= min_count].copy()
+    if plot_df.empty:
+        raise ValueError("No categories meet the minimum count threshold for plotting.")
+
+    if total_change_col not in plot_df.columns:
+        plot_df[total_change_col] = plot_df[median_dollar_col] * plot_df[property_count_col]
+
+    plot_df = plot_df.sort_values(median_pct_col).reset_index(drop=True)
+
+    categories = plot_df[category_col].tolist()
+    counts = plot_df[property_count_col].tolist()
+    median_pct_change = plot_df[median_pct_col].tolist()
+    median_dollar_change = plot_df[median_dollar_col].tolist()
+    total_tax_change = plot_df[total_change_col].tolist()
+
+    bar_colors = ["#8B0000" if val > 0 else "#228B22" for val in median_pct_change]
+    y = np.arange(len(categories))
+    fig_height = len(categories) * 0.8 + 1.2
+    fig, ax = plt.subplots(figsize=(figsize_width, fig_height))
+
+    ax.barh(
+        y,
+        median_pct_change,
+        color=bar_colors,
+        edgecolor="none",
+        height=0.75,
+        alpha=0.92,
+        linewidth=0,
+        zorder=2,
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    ax.axvline(0, color="black", linewidth=1, linestyle="dotted", zorder=1)
+    ax.grid(False)
+
+    cat_offset = 0.18
+    med_offset = -0.03
+    count_offset = -0.23
+    max_abs = max(abs(min(median_pct_change)), abs(max(median_pct_change)))
+    right_col_x = max_abs + right_col_pad
+
+    ax.text(
+        right_col_x,
+        len(categories) - 0.25,
+        "Net Change",
+        ha="center",
+        va="bottom",
+        fontsize=15,
+        fontweight="bold",
+    )
+
+    for i, (cat, med_pct, med_dollar, count, total_change) in enumerate(
+        zip(categories, median_pct_change, median_dollar_change, counts, total_tax_change)
+    ):
+        bar_end = med_pct
+        text_x = bar_end + 1.2 if med_pct >= 0 else bar_end - 1.2
+        text_ha = "left" if med_pct >= 0 else "right"
+        pct_label = f"{med_pct:+.1f}%"
+        dollar_label = f"${med_dollar:,.0f}"
+        total_label = f"${total_change:,.0f}"
+
+        ax.text(
+            text_x,
+            i + cat_offset,
+            cat,
+            ha=text_ha,
+            va="center",
+            fontsize=14,
+            fontweight="bold",
+        )
+        ax.text(
+            text_x,
+            i + med_offset,
+            f"Median: {dollar_label}, {pct_label}",
+            ha=text_ha,
+            va="center",
+            fontsize=12,
+            fontweight="bold",
+        )
+        ax.text(
+            text_x,
+            i + count_offset,
+            f"{count:,} parcels",
+            ha=text_ha,
+            va="center",
+            fontsize=11,
+            color="#888888",
+        )
+        ax.text(
+            right_col_x,
+            i,
+            total_label,
+            ha="center",
+            va="center",
+            fontsize=12,
+            fontweight="bold",
+        )
+
+    ax.set_title(title, fontsize=18, fontweight="bold", pad=18)
+    ax.set_xlim(-right_col_x, right_col_x + 60)
+    ax.set_ylim(-0.8, len(categories) - 0.05)
+    plt.tight_layout()
+    plt.show()
+    return fig, ax
+
+
+def create_threshold_change_chart(
+    summary_df: pd.DataFrame,
+    title: str = "Share of Parcels with Tax Changes Above Threshold",
+    category_col: str = "PROPERTY_CATEGORY",
+    increase_col: str = "pct_increase_gt_threshold",
+    decrease_col: str = "pct_decrease_gt_threshold",
+    property_count_col: str = "property_count",
+    threshold: float = 10.0,
+    min_count: int = 10,
+    figsize: Tuple[int, int] = (11, 7),
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Create the Spokane-style split chart showing shares of parcels with
+    increases or decreases above a threshold.
+    """
+    required = {category_col, increase_col, decrease_col, property_count_col}
+    missing = required - set(summary_df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns for threshold chart: {sorted(missing)}")
+
+    plot_df = summary_df[summary_df[property_count_col] >= min_count].copy()
+    if plot_df.empty:
+        raise ValueError("No categories meet the minimum count threshold for plotting.")
+
+    plot_df = plot_df.sort_values(increase_col, ascending=True).reset_index(drop=True)
+    y = np.arange(len(plot_df))
+
+    increase_vals = plot_df[increase_col].astype(float).tolist()
+    decrease_vals = plot_df[decrease_col].astype(float).tolist()
+    categories = plot_df[category_col].tolist()
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ax.barh(
+        y,
+        [-v for v in decrease_vals],
+        color="#228B22",
+        edgecolor="none",
+        height=0.7,
+    )
+    ax.barh(
+        y,
+        increase_vals,
+        color="#8B0000",
+        edgecolor="none",
+        height=0.7,
+    )
+    ax.axvline(0, color="black", linewidth=1, linestyle="dotted")
+    ax.grid(False)
+
+    max_extent = max(max(increase_vals, default=0), max(decrease_vals, default=0))
+    label_pad = max(4.0, max_extent * 0.08)
+    category_pad = max(16.0, max_extent * 0.2)
+
+    for i, (inc, dec) in enumerate(zip(increase_vals, decrease_vals)):
+        if dec > 0:
+            ax.text(
+                -dec - label_pad,
+                y[i],
+                f"{int(round(dec))}%",
+                va="center",
+                ha="right",
+                fontsize=9,
+                color="#228B22",
+                fontweight="bold",
+            )
+        if inc > 0:
+            ax.text(
+                inc + label_pad,
+                y[i],
+                f"{int(round(inc))}%",
+                va="center",
+                ha="left",
+                fontsize=9,
+                color="#8B0000",
+                fontweight="bold",
+            )
+
+        xpos = inc + category_pad if inc > 0 else category_pad
+        ax.text(
+            xpos,
+            y[i],
+            categories[i],
+            va="center",
+            ha="left",
+            fontsize=10,
+            fontweight="bold",
+        )
+
+    ax.text(
+        -max_extent * 0.55,
+        len(categories) - 0.15,
+        f"Decrease > {threshold:.0f}%",
+        ha="center",
+        va="bottom",
+        fontsize=12,
+        fontweight="bold",
+        color="#228B22",
+    )
+    ax.text(
+        max_extent * 0.55,
+        len(categories) - 0.15,
+        f"Increase > {threshold:.0f}%",
+        ha="center",
+        va="bottom",
+        fontsize=12,
+        fontweight="bold",
+        color="#8B0000",
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    ax.set_title(title, fontsize=16, fontweight="bold", pad=20)
+    ax.set_xlim(-(max_extent + category_pad + 12), max_extent + category_pad + 35)
+    ax.set_ylim(-0.8, len(categories) - 0.1)
+    plt.tight_layout()
+    plt.show()
+    return fig, ax
+
+
+def plot_upside_down_quintile_bars(
+    summary_df: pd.DataFrame,
+    title: str,
+    quintile_col: Optional[str] = None,
+    value_col: str = "median_tax_change_pct",
+    figsize: Tuple[int, int] = (10, 6),
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Create the Spokane/Cleveland-style census progressivity chart.
+
+    Negative values extend downward from zero; positive values extend upward.
+    """
+    if quintile_col is None:
+        quintile_candidates = [c for c in summary_df.columns if c.endswith("_quintile")]
+        if not quintile_candidates:
+            raise ValueError("Could not infer quintile column; please provide quintile_col.")
+        quintile_col = quintile_candidates[0]
+
+    if quintile_col not in summary_df.columns or value_col not in summary_df.columns:
+        raise ValueError(f"Missing required columns: {quintile_col}, {value_col}")
+
+    plot_df = summary_df.copy()
+    labels = plot_df[quintile_col].astype(str).tolist()
+    vals = plot_df[value_col].astype(float).tolist()
+    x = np.arange(len(labels))
+
+    neg_vals = [abs(v) for v in vals if v < 0]
+    pos_vals = [v for v in vals if v > 0]
+    neg_palette = sns.color_palette("Greens", n_colors=max(len(neg_vals), 1))
+    pos_palette = sns.color_palette("Reds", n_colors=max(len(pos_vals), 1))
+    neg_rank = np.argsort(np.argsort([-abs(v) for v in vals if v < 0])) if neg_vals else []
+    pos_rank = np.argsort(np.argsort(pos_vals)) if pos_vals else []
+
+    colors = []
+    neg_i = 0
+    pos_i = 0
+    for val in vals:
+        if val < 0:
+            colors.append(neg_palette[neg_rank[neg_i]])
+            neg_i += 1
+        elif val > 0:
+            colors.append(pos_palette[pos_rank[pos_i]])
+            pos_i += 1
+        else:
+            colors.append("#bdbdbd")
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bars = ax.bar(
+        x,
+        vals,
+        color=colors,
+        edgecolor="black",
+        width=0.7,
+    )
+
+    ax.axhline(0, color="black", linewidth=1, linestyle="dotted")
+    ax.grid(False)
+    ax.yaxis.set_visible(False)
+    ax.set_ylabel("")
+    ax.set_xlabel("")
+    ax.set_title(title, weight="bold", pad=30)
+    sns.despine(left=True, right=True, top=True, bottom=True)
+
+    for bar, val in zip(bars, vals):
+        if abs(val) < 0.01:
+            ypos = 0.5
+            va = "bottom"
+        elif val < 0:
+            ypos = val / 2
+            va = "center"
+        else:
+            ypos = val / 2
+            va = "center"
+        ax.annotate(
+            f"{val:.1f}%",
+            xy=(bar.get_x() + bar.get_width() / 2, ypos),
+            xytext=(0, 0),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            fontsize=13,
+            color="black",
+            fontweight="bold",
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontweight="bold")
+    ax.xaxis.set_ticks_position("top")
+    ax.xaxis.set_label_position("top")
+
+    ymin = min(vals + [0])
+    ymax = max(vals + [0])
+    ypad = max(abs(ymin), abs(ymax)) * 0.15 if max(abs(ymin), abs(ymax)) > 0 else 1.0
+    ax.set_ylim(ymin - ypad, ymax + ypad)
+
+    plt.tight_layout()
+    plt.show()
+    return fig, ax
 
 
 def create_map_visualization(
