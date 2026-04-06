@@ -375,6 +375,8 @@ def analyze_land_by_improvement_share(
     lt_10_mask = (improvement_share > 0) & (improvement_share < 0.10)
     from_10_25_mask = (improvement_share >= 0.10) & (improvement_share < 0.25)
     from_25_50_mask = (improvement_share >= 0.25) & (improvement_share < 0.50)
+    from_gt0_25_mask = (improvement_share > 0) & (improvement_share < 0.25)
+    from_gt0_50_mask = (improvement_share > 0) & (improvement_share < 0.50)
 
     # Total adjusted land base for share calculation
     total_adj_land = float(adj_land[non_exempt_mask].sum())
@@ -398,6 +400,8 @@ def analyze_land_by_improvement_share(
         summarize_category('<10% improvement (excl. 0%)', lt_10_mask),
         summarize_category('10-25% improvement', from_10_25_mask),
         summarize_category('25-50% improvement', from_25_50_mask),
+        summarize_category('>0%-25% improvement', from_gt0_25_mask),
+        summarize_category('>0%-50% improvement', from_gt0_50_mask)
     ]
 
     return {

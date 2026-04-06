@@ -347,6 +347,7 @@ def calculate_current_tax(
     improvement_value_col: Optional[str] = None,
     credit_col: Optional[str] = None,
     credit_rate_col: Optional[str] = None,
+    verbose: bool = False
 ) -> Tuple[float, float, pd.DataFrame]:
     """
     Calculate current property tax based on tax value and millage rate.
@@ -504,7 +505,8 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
                          exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
                          percentage_cap_col: Optional[str] = None,
                          credit_col: Optional[str] = None,
-                         credit_rate_col: Optional[str] = None) -> Tuple[float, float, float, pd.DataFrame]:
+                         credit_rate_col: Optional[str] = None,
+                         verbose: bool = False) -> Tuple[float, float, float, pd.DataFrame]:
     """
     Model a split-rate property tax where land is taxed at a higher rate than improvements.
     
@@ -670,7 +672,10 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         print(f"Improvement millage rate: {improvement_millage:.4f}")
         print(f"Total tax revenue: ${new_total_revenue:,.2f}")
         print(f"Target revenue: ${current_revenue:,.2f}")
-        print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+        if current_revenue != 0:
+            print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+        else:
+            print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} (N/A - zero base revenue)")
     
     # Print category summary if category column exists
     category_summary = calculate_category_tax_summary(result_df)
