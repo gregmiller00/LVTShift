@@ -3,6 +3,152 @@ import geopandas as gpd
 import numpy as np
 from typing import Union, List, Tuple, Optional
 
+
+def _coerce_numeric(series: pd.Series, fill_value: float = 0.0) -> pd.Series:
+    """Convert a Series to numeric and replace missing values."""
+    return pd.to_numeric(series, errors='coerce').fillna(fill_value)
+
+
+def _compute_adjusted_tax_components(
+    df: pd.DataFrame,
+    land_value_col: Optional[str] = None,
+    improvement_value_col: Optional[str] = None,
+    exemption_col: Optional[str] = None,
+    exemption_flag_col: Optional[str] = None,
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    Compute taxable land and improvement values.
+
+    Partial relief is applied to improvements first, then to land.
+    Fully exempt parcels are forced to zero after partial-relief allocation.
+    """
+    if land_value_col is None:
+        land = pd.Series(0.0, index=df.index, dtype=float)
+    else:
+        land = _coerce_numeric(df[land_value_col])
+
+    if improvement_value_col is None:
+        improvement = pd.Series(0.0, index=df.index, dtype=float)
+    else:
+        improvement = _coerce_numeric(df[improvement_value_col])
+
+    adj_land = land.copy()
+    adj_improvement = improvement.copy()
+
+    if exemption_col is not None:
+        relief = _coerce_numeric(df[exemption_col]).clip(lower=0)
+        remaining_relief = (relief - adj_improvement).clip(lower=0)
+        adj_improvement = (adj_improvement - relief).clip(lower=0)
+        adj_land = (adj_land - remaining_relief).clip(lower=0)
+
+    if exemption_flag_col is not None:
+        fully_exempt = _coerce_numeric(df[exemption_flag_col]).fillna(0) != 0
+        adj_land = adj_land.where(~fully_exempt, 0.0)
+        adj_improvement = adj_improvement.where(~fully_exempt, 0.0)
+
+    return adj_land, adj_improvement
+
+
+def _apply_tax_credits(
+    base_tax: pd.Series,
+    df: pd.DataFrame,
+    credit_col: Optional[str] = None,
+    credit_rate_col: Optional[str] = None,
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    Apply post-tax credits and clip the final tax at zero.
+
+    `credit_rate_col` is interpreted as a parcel-specific share of tax to reduce,
+    bounded to [0, 1]. `credit_col` is interpreted as a fixed dollar credit.
+    """
+    net_tax = _coerce_numeric(base_tax).clip(lower=0)
+    total_credit = pd.Series(0.0, index=df.index, dtype=float)
+
+    if credit_rate_col is not None:
+        credit_rate = _coerce_numeric(df[credit_rate_col]).clip(lower=0, upper=1)
+        total_credit = total_credit + (net_tax * credit_rate)
+
+    if credit_col is not None:
+        fixed_credit = _coerce_numeric(df[credit_col]).clip(lower=0)
+        total_credit = total_credit + fixed_credit
+
+    net_tax = (net_tax - total_credit).clip(lower=0)
+    realized_credit = (base_tax - net_tax).clip(lower=0)
+    return net_tax, realized_credit
+
+
+def _solve_revenue_neutral_split_millage(
+    adj_land_value: pd.Series,
+    adj_improvement_value: pd.Series,
+    result_df: pd.DataFrame,
+    current_revenue: float,
+    land_improvement_ratio: float,
+    land_value_col: str,
+    improvement_value_col: str,
+    percentage_cap_col: Optional[str] = None,
+    credit_col: Optional[str] = None,
+    credit_rate_col: Optional[str] = None,
+    tolerance: float = 1e-7,
+    max_iterations: int = 80,
+) -> Tuple[float, float]:
+    """Solve for revenue-neutral split millage rates with caps and post-tax credits."""
+    total_land_value = float(adj_land_value.sum())
+    total_improvement_value = float(adj_improvement_value.sum())
+    denominator = total_improvement_value + land_improvement_ratio * total_land_value
+    if denominator <= 0:
+        raise ValueError("Total taxable value is zero or negative, cannot calculate millage rates")
+
+    target_revenue = float(current_revenue)
+    if target_revenue < 0:
+        raise ValueError("current_revenue must be non-negative")
+
+    def revenue_for_improvement_millage(improvement_millage: float) -> float:
+        land_millage = land_improvement_ratio * improvement_millage
+        land_tax = adj_land_value * land_millage / 1000
+        improvement_tax = adj_improvement_value * improvement_millage / 1000
+        gross_tax = (land_tax + improvement_tax).clip(lower=0)
+
+        if percentage_cap_col is not None:
+            max_tax = (
+                _coerce_numeric(result_df[land_value_col]) + _coerce_numeric(result_df[improvement_value_col])
+            ) * _coerce_numeric(result_df[percentage_cap_col], fill_value=1).clip(lower=0)
+            gross_tax = np.minimum(gross_tax, max_tax)
+
+        net_tax, _ = _apply_tax_credits(gross_tax, result_df, credit_col=credit_col, credit_rate_col=credit_rate_col)
+        return float(net_tax.sum())
+
+    # Closed form if nothing distorts the tax after rate application.
+    if percentage_cap_col is None and credit_col is None and credit_rate_col is None:
+        improvement_millage = (target_revenue * 1000) / denominator
+        return land_improvement_ratio * improvement_millage, improvement_millage
+
+    low = 0.0
+    high = max((target_revenue * 1000) / denominator, 1e-9)
+    high_revenue = revenue_for_improvement_millage(high)
+
+    expand_count = 0
+    while high_revenue < target_revenue and expand_count < max_iterations:
+        high *= 2.0
+        high_revenue = revenue_for_improvement_millage(high)
+        expand_count += 1
+
+    if high_revenue < target_revenue:
+        raise ValueError("Unable to reach target revenue after applying caps and credits")
+
+    for _ in range(max_iterations):
+        mid = (low + high) / 2.0
+        mid_revenue = revenue_for_improvement_millage(mid)
+        if target_revenue == 0 or abs(mid_revenue - target_revenue) / max(target_revenue, 1.0) < tolerance:
+            improvement_millage = mid
+            return land_improvement_ratio * improvement_millage, improvement_millage
+        if mid_revenue < target_revenue:
+            low = mid
+        else:
+            high = mid
+
+    improvement_millage = high
+    return land_improvement_ratio * improvement_millage, improvement_millage
+
 def calculate_category_tax_summary(
     df: pd.DataFrame, 
     category_col: str = 'PROPERTY_CATEGORY',
@@ -189,7 +335,19 @@ def print_category_tax_summary(
         print(f"Percent of ALL parcels with tax increase > +{pct_threshold:.0f}%: {100 * gt_count / total_count:.2f}%")
         print(f"Percent of ALL parcels with tax decrease < -{pct_threshold:.0f}%: {100 * lt_count / total_count:.2f}%")
 
-def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col: str, exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None, percentage_cap_col: Optional[str] = None, second_millage_rate_col: Optional[str] = None, verbose: bool = False) -> Tuple[float, float, pd.DataFrame]:
+def calculate_current_tax(
+    df: pd.DataFrame,
+    tax_value_col: str,
+    millage_rate_col: str,
+    exemption_col: Optional[str] = None,
+    exemption_flag_col: Optional[str] = None,
+    percentage_cap_col: Optional[str] = None,
+    second_millage_rate_col: Optional[str] = None,
+    land_value_col: Optional[str] = None,
+    improvement_value_col: Optional[str] = None,
+    credit_col: Optional[str] = None,
+    credit_rate_col: Optional[str] = None,
+) -> Tuple[float, float, pd.DataFrame]:
     """
     Calculate current property tax based on tax value and millage rate.
     
@@ -232,6 +390,14 @@ def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col
         raise TypeError("percentage_cap_col must be a string or None")
     if second_millage_rate_col is not None and not isinstance(second_millage_rate_col, str):
         raise TypeError("second_millage_rate_col must be a string or None")
+    if land_value_col is not None and not isinstance(land_value_col, str):
+        raise TypeError("land_value_col must be a string or None")
+    if improvement_value_col is not None and not isinstance(improvement_value_col, str):
+        raise TypeError("improvement_value_col must be a string or None")
+    if credit_col is not None and not isinstance(credit_col, str):
+        raise TypeError("credit_col must be a string or None")
+    if credit_rate_col is not None and not isinstance(credit_rate_col, str):
+        raise TypeError("credit_rate_col must be a string or None")
     
     # Check if columns exist in the DataFrame
     for col in [tax_value_col, millage_rate_col]:
@@ -245,45 +411,75 @@ def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col
         raise ValueError(f"Percentage cap column '{percentage_cap_col}' not found in DataFrame")
     if second_millage_rate_col is not None and second_millage_rate_col not in df.columns:
         raise ValueError(f"Second millage rate column '{second_millage_rate_col}' not found in DataFrame")
+    if land_value_col is not None and land_value_col not in df.columns:
+        raise ValueError(f"Land value column '{land_value_col}' not found in DataFrame")
+    if improvement_value_col is not None and improvement_value_col not in df.columns:
+        raise ValueError(f"Improvement value column '{improvement_value_col}' not found in DataFrame")
+    if credit_col is not None and credit_col not in df.columns:
+        raise ValueError(f"Credit column '{credit_col}' not found in DataFrame")
+    if credit_rate_col is not None and credit_rate_col not in df.columns:
+        raise ValueError(f"Credit rate column '{credit_rate_col}' not found in DataFrame")
     
     # Make a copy to avoid modifying the original
     result_df = df.copy()
     
     # Ensure numeric values
-    result_df[tax_value_col] = pd.to_numeric(result_df[tax_value_col], errors='coerce')
-    result_df[millage_rate_col] = pd.to_numeric(result_df[millage_rate_col], errors='coerce')
+    result_df[tax_value_col] = _coerce_numeric(result_df[tax_value_col])
+    result_df[millage_rate_col] = _coerce_numeric(result_df[millage_rate_col])
     
     if second_millage_rate_col is not None:
-        result_df[second_millage_rate_col] = pd.to_numeric(result_df[second_millage_rate_col], errors='coerce')
+        result_df[second_millage_rate_col] = _coerce_numeric(result_df[second_millage_rate_col])
         # Verify second millage rate is less than primary
         if (result_df[second_millage_rate_col] > result_df[millage_rate_col]).any():
             raise ValueError("Second millage rate must be less than the primary millage rate")
-    
-    # Apply exemptions if provided
-    if exemption_flag_col is not None:
-        result_df[exemption_flag_col] = pd.to_numeric(result_df[exemption_flag_col], errors='coerce').fillna(0)
-        taxable_value = result_df[tax_value_col].where(result_df[exemption_flag_col] == 0, 0)
+
+    if land_value_col is not None or improvement_value_col is not None:
+        adj_land_value, adj_improvement_value = _compute_adjusted_tax_components(
+            result_df,
+            land_value_col=land_value_col,
+            improvement_value_col=improvement_value_col,
+            exemption_col=exemption_col,
+            exemption_flag_col=exemption_flag_col,
+        )
+        taxable_value = (adj_land_value + adj_improvement_value).clip(lower=0)
+        result_df['current_taxable_land'] = adj_land_value
+        result_df['current_taxable_improvement'] = adj_improvement_value
+        cap_base_value = _coerce_numeric(result_df[land_value_col] if land_value_col is not None else 0) + _coerce_numeric(
+            result_df[improvement_value_col] if improvement_value_col is not None else 0
+        )
     else:
-        taxable_value = result_df[tax_value_col]
-    
-    if exemption_col is not None:
-        result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
-        taxable_value = (taxable_value - result_df[exemption_col]).clip(lower=0)
-    
-    # Calculate tax amount
-    result_df['current_tax'] = taxable_value * result_df[millage_rate_col] / 1000
+        if exemption_flag_col is not None:
+            result_df[exemption_flag_col] = _coerce_numeric(result_df[exemption_flag_col])
+            taxable_value = result_df[tax_value_col].where(result_df[exemption_flag_col] == 0, 0)
+        else:
+            taxable_value = result_df[tax_value_col]
+
+        if exemption_col is not None:
+            result_df[exemption_col] = _coerce_numeric(result_df[exemption_col]).clip(lower=0)
+            taxable_value = (taxable_value - result_df[exemption_col]).clip(lower=0)
+
+        cap_base_value = result_df[tax_value_col]
+
+    result_df['current_taxable_value'] = taxable_value.clip(lower=0)
+    result_df['current_tax_before_credits'] = result_df['current_taxable_value'] * result_df[millage_rate_col] / 1000
     
     # Apply percentage cap if provided
     if percentage_cap_col is not None:
-        result_df[percentage_cap_col] = pd.to_numeric(result_df[percentage_cap_col], errors='coerce').fillna(1)
+        result_df[percentage_cap_col] = _coerce_numeric(result_df[percentage_cap_col], fill_value=1).clip(lower=0)
         # Calculate maximum tax based on percentage cap
-        max_tax = result_df[tax_value_col] * result_df[percentage_cap_col]
+        max_tax = cap_base_value * result_df[percentage_cap_col]
         # Create a flag to indicate if the tax was capped
-        result_df['tax_capped'] = result_df['current_tax'] > max_tax
+        result_df['tax_capped'] = result_df['current_tax_before_credits'] > max_tax
         # Apply cap - tax cannot exceed the percentage cap of property value
-        result_df['current_tax'] = np.minimum(result_df['current_tax'], max_tax)
-    # Handle NaN values safely
-    result_df['current_tax'] = result_df['current_tax'].fillna(0)
+        result_df['current_tax_before_credits'] = np.minimum(result_df['current_tax_before_credits'], max_tax)
+
+    result_df['current_tax_before_credits'] = _coerce_numeric(result_df['current_tax_before_credits']).clip(lower=0)
+    result_df['current_tax'], result_df['current_credit_amount'] = _apply_tax_credits(
+        result_df['current_tax_before_credits'],
+        result_df,
+        credit_col=credit_col,
+        credit_rate_col=credit_rate_col,
+    )
     
     # Calculate total revenue
     total_revenue = float(result_df['current_tax'].sum())
@@ -306,7 +502,9 @@ def calculate_current_tax(df: pd.DataFrame, tax_value_col: str, millage_rate_col
 def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
                          current_revenue: float, land_improvement_ratio: float = 3, 
                          exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
-                         percentage_cap_col: Optional[str] = None, verbose: bool = False) -> Tuple[float, float, float, pd.DataFrame]:
+                         percentage_cap_col: Optional[str] = None,
+                         credit_col: Optional[str] = None,
+                         credit_rate_col: Optional[str] = None) -> Tuple[float, float, float, pd.DataFrame]:
     """
     Model a split-rate property tax where land is taxed at a higher rate than improvements.
     
@@ -359,6 +557,10 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         raise TypeError("exemption_flag_col must be a string or None")
     if percentage_cap_col is not None and not isinstance(percentage_cap_col, str):
         raise TypeError("percentage_cap_col must be a string or None")
+    if credit_col is not None and not isinstance(credit_col, str):
+        raise TypeError("credit_col must be a string or None")
+    if credit_rate_col is not None and not isinstance(credit_rate_col, str):
+        raise TypeError("credit_rate_col must be a string or None")
     
     # Check if columns exist in the DataFrame
     for col in [land_value_col, improvement_value_col]:
@@ -370,122 +572,84 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         raise ValueError(f"Exemption flag column '{exemption_flag_col}' not found in DataFrame")
     if percentage_cap_col is not None and percentage_cap_col not in df.columns:
         raise ValueError(f"Percentage cap column '{percentage_cap_col}' not found in DataFrame")
+    if credit_col is not None and credit_col not in df.columns:
+        raise ValueError(f"Credit column '{credit_col}' not found in DataFrame")
+    if credit_rate_col is not None and credit_rate_col not in df.columns:
+        raise ValueError(f"Credit rate column '{credit_rate_col}' not found in DataFrame")
     
     # Make a copy to avoid modifying the original
     result_df = df.copy()
     
     # Ensure numeric values
-    result_df[land_value_col] = pd.to_numeric(result_df[land_value_col], errors='coerce').fillna(0)
-    result_df[improvement_value_col] = pd.to_numeric(result_df[improvement_value_col], errors='coerce').fillna(0)
-    
-    # Handle exemptions
-    if exemption_flag_col is not None:
-        result_df[exemption_flag_col] = pd.to_numeric(result_df[exemption_flag_col], errors='coerce').fillna(0)
-        adj_improvement_value = result_df[improvement_value_col].where(result_df[exemption_flag_col] == 0, 0)
-        adj_land_value = result_df[land_value_col].where(result_df[exemption_flag_col] == 0, 0)
-    else:
-        adj_improvement_value = result_df[improvement_value_col]
-        adj_land_value = result_df[land_value_col]
-    
-    if exemption_col is not None:
-        result_df[exemption_col] = pd.to_numeric(result_df[exemption_col], errors='coerce').fillna(0)
-        # First apply exemptions to improvements
-        remaining_exemptions = result_df[exemption_col] - adj_improvement_value
-        
-        # Calculate adjusted improvement value
-        adj_improvement_value = (adj_improvement_value - result_df[exemption_col]).clip(lower=0)
-        
-        # Apply remaining exemptions to land value if necessary
-        adj_land_value = (adj_land_value - remaining_exemptions.clip(lower=0)).clip(lower=0)
-    
-    # Calculate total values for rate determination
-    total_land_value = float(adj_land_value.sum())
-    total_improvement_value = float(adj_improvement_value.sum())
-    
-    # Prevent division by zero
-    denominator = (total_improvement_value + land_improvement_ratio * total_land_value)
-    if denominator <= 0:
-        raise ValueError("Total taxable value is zero or negative, cannot calculate millage rates")
-    
-    # If we have a percentage cap, we need to use an iterative approach to find the correct millage rates
-    if percentage_cap_col is not None:
-        result_df[percentage_cap_col] = pd.to_numeric(result_df[percentage_cap_col], errors='coerce').fillna(1)
-        total_value = result_df[land_value_col] + result_df[improvement_value_col]
-        
-        # Initial guess for millage rates
-        improvement_millage = (current_revenue * 1000) / denominator
-        land_millage = land_improvement_ratio * improvement_millage
-        
-        # Iterative approach to find the correct millage rates
-        max_iterations = 40
-        tolerance = 0.00001  # 0.1% tolerance
-        iteration = 0
-        adjustment_factor = 1.0
-        
-        while iteration < max_iterations:
-            # Calculate taxes with current millage rates
-            land_tax = adj_land_value * land_millage / 1000
-            improvement_tax = adj_improvement_value * improvement_millage / 1000
-            uncapped_tax = land_tax + improvement_tax
-            
-            # Apply cap
-            max_tax = total_value * result_df[percentage_cap_col]
-            capped_tax = np.minimum(uncapped_tax, max_tax)
-            
-            # Calculate total revenue with caps applied
-            new_total_revenue = float(capped_tax.sum())
-            
-            # Check if we're close enough to the target revenue
-            if abs(new_total_revenue - current_revenue) / current_revenue < tolerance:
-                break
-                
-            # Adjust millage rates to get closer to target revenue
-            adjustment_factor = current_revenue / new_total_revenue
-            improvement_millage *= adjustment_factor
-            land_millage = land_improvement_ratio * improvement_millage
-            
-            iteration += 1
-        
-        if iteration == max_iterations:
-            print(f"Warning: Maximum iterations reached. Revenue target may not be exact. Current: ${new_total_revenue:,.2f}, Target: ${current_revenue:,.2f}")
-    else:
-        # Calculate millage rates to maintain revenue neutrality (no cap)
-        improvement_millage = (current_revenue * 1000) / denominator
-        land_millage = land_improvement_ratio * improvement_millage
+    result_df[land_value_col] = _coerce_numeric(result_df[land_value_col])
+    result_df[improvement_value_col] = _coerce_numeric(result_df[improvement_value_col])
+    adj_land_value, adj_improvement_value = _compute_adjusted_tax_components(
+        result_df,
+        land_value_col=land_value_col,
+        improvement_value_col=improvement_value_col,
+        exemption_col=exemption_col,
+        exemption_flag_col=exemption_flag_col,
+    )
+    result_df['taxable_land_value'] = adj_land_value
+    result_df['taxable_improvement_value'] = adj_improvement_value
+
+    land_millage, improvement_millage = _solve_revenue_neutral_split_millage(
+        adj_land_value=adj_land_value,
+        adj_improvement_value=adj_improvement_value,
+        result_df=result_df,
+        current_revenue=float(current_revenue),
+        land_improvement_ratio=float(land_improvement_ratio),
+        land_value_col=land_value_col,
+        improvement_value_col=improvement_value_col,
+        percentage_cap_col=percentage_cap_col,
+        credit_col=credit_col,
+        credit_rate_col=credit_rate_col,
+    )
     
     # Calculate new tax amounts
-    result_df['land_tax'] = adj_land_value * land_millage / 1000
-    result_df['improvement_tax'] = adj_improvement_value * improvement_millage / 1000
-    result_df['new_tax'] = result_df['land_tax'] + result_df['improvement_tax']
+    result_df['land_tax_before_credits'] = (adj_land_value * land_millage / 1000).clip(lower=0)
+    result_df['improvement_tax_before_credits'] = (adj_improvement_value * improvement_millage / 1000).clip(lower=0)
+    result_df['new_tax_before_credits'] = (
+        result_df['land_tax_before_credits'] + result_df['improvement_tax_before_credits']
+    ).clip(lower=0)
     
     # Apply percentage cap if provided
     if percentage_cap_col is not None:
         # Calculate maximum tax based on percentage cap
-        total_value = result_df[land_value_col] + result_df[improvement_value_col]
+        total_value = _coerce_numeric(result_df[land_value_col]) + _coerce_numeric(result_df[improvement_value_col])
         max_tax = total_value * result_df[percentage_cap_col]
         # Create a flag to indicate if the tax was capped
-        result_df['tax_capped'] = result_df['new_tax'] > max_tax
+        result_df['tax_capped'] = result_df['new_tax_before_credits'] > max_tax
         # Apply cap - tax cannot exceed the percentage cap of property value
-        result_df['new_tax'] = np.minimum(result_df['new_tax'], max_tax)
+        result_df['new_tax_before_credits'] = np.minimum(result_df['new_tax_before_credits'], max_tax)
         
         # Recalculate land_tax and improvement_tax to maintain the same ratio
         # but respect the cap
         cap_applied = result_df['tax_capped']
-        total_uncapped = result_df['land_tax'] + result_df['improvement_tax']
+        total_uncapped = result_df['land_tax_before_credits'] + result_df['improvement_tax_before_credits']
         
         # For properties where cap is applied, redistribute the capped tax amount
         # proportionally between land and improvements
-        result_df.loc[cap_applied, 'land_tax'] = (
-            result_df.loc[cap_applied, 'land_tax'] / 
+        result_df.loc[cap_applied, 'land_tax_before_credits'] = (
+            result_df.loc[cap_applied, 'land_tax_before_credits'] / 
             total_uncapped[cap_applied] * 
-            result_df.loc[cap_applied, 'new_tax']
+            result_df.loc[cap_applied, 'new_tax_before_credits']
         )
         
-        result_df.loc[cap_applied, 'improvement_tax'] = (
-            result_df.loc[cap_applied, 'improvement_tax'] / 
+        result_df.loc[cap_applied, 'improvement_tax_before_credits'] = (
+            result_df.loc[cap_applied, 'improvement_tax_before_credits'] / 
             total_uncapped[cap_applied] * 
-            result_df.loc[cap_applied, 'new_tax']
+            result_df.loc[cap_applied, 'new_tax_before_credits']
         )
+    
+    result_df['new_tax'], result_df['new_credit_amount'] = _apply_tax_credits(
+        result_df['new_tax_before_credits'],
+        result_df,
+        credit_col=credit_col,
+        credit_rate_col=credit_rate_col,
+    )
+    result_df['land_tax'] = result_df['land_tax_before_credits']
+    result_df['improvement_tax'] = result_df['improvement_tax_before_credits']
     
     # Calculate total revenue with new system
     new_total_revenue = float(result_df['new_tax'].sum())
@@ -507,6 +671,10 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         print(f"Total tax revenue: ${new_total_revenue:,.2f}")
         print(f"Target revenue: ${current_revenue:,.2f}")
         print(f"Revenue difference: ${new_total_revenue - current_revenue:,.2f} ({(new_total_revenue/current_revenue - 1)*100:.4f}%)")
+    
+    # Print category summary if category column exists
+    category_summary = calculate_category_tax_summary(result_df)
+    #print_category_tax_summary(category_summary, "Split-Rate Tax Change by Property Category")
     
     return land_millage, improvement_millage, new_total_revenue, result_df
 
@@ -690,7 +858,7 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
     
     # Print category summary if category column exists
     category_summary = calculate_category_tax_summary(result_df)
-    print_category_tax_summary(category_summary, f"Building Abatement ({abatement_percentage*100:.1f}%) Tax Change by Property Category")
+    #print_category_tax_summary(category_summary, f"Building Abatement ({abatement_percentage*100:.1f}%) Tax Change by Property Category")
     
     return millage_rate, new_total_revenue, result_df
 
