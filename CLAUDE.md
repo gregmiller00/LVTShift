@@ -87,6 +87,10 @@ Active notebooks:
 
 Both notebooks collapse condo units into buildings (Step 3b) before modeling. Data stored in `examples/data/st_paul/` as geoparquet files.
 
+## Per-notebook skills
+
+In "examples/" you will find a folder, "skills/". This contains .md files that correspond to a notebook and contain specific instructions for it. When you are working on a particular notebook, first read the relevant skills file to inform you.
+
 ## Code Style
 
 - No decorative comment headers (avoid `# =============================================================================`)
