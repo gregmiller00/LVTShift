@@ -96,6 +96,10 @@ Data stored locally in `cities/<city>/data/` as geoparquet files (gitignored).
 - `docs/LVT_MODELING_GUIDE.md` — step-by-step guide for adding a new city
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor)
 
+## Per-notebook skills
+
+In "examples/" you will find a folder, "skills/". This contains .md files that correspond to a notebook and contain specific instructions for it. When you are working on a particular notebook, first read the relevant skills file to inform you.
+
 ## Code Style
 
 - No decorative comment headers (avoid `# =============================================================================`)
