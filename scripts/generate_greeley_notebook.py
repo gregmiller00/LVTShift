@@ -283,6 +283,76 @@ cells = [
             print(f"{ratio}:1 split -> land mill {land_mill:.4f}, imp mill {imp_mill:.4f}, revenue {revenue:,.2f}")
         """
     ),
+    md("## Step 5: Calculate IR, Split Tax Capacity, Run Model"),
+    code(
+        """
+        tc_df = analysis_gdf.copy()
+        tc_df["IR"] = np.where(tc_df["TOTALASD"] > 0, tc_df["IMPASD"] / tc_df["TOTALASD"], 0)
+        tc_df["TaxCapacity"] = tc_df["TOTALASD"]
+        tc_df["TaxCapacity_Improvements"] = tc_df["IR"] * tc_df["TaxCapacity"]
+        tc_df["TaxCapacity_Land"] = (1 - tc_df["IR"]) * tc_df["TaxCapacity"]
+        tc_df["current_tax"] = tc_df["TOTALASD"] / 1000.0
+        current_revenue = tc_df["current_tax"].sum()
+
+        print("Tax Capacity Split Summary:")
+        print(f"  Total Tax Capacity:          ${tc_df['TaxCapacity'].sum():>15,.0f}")
+        print(f"  Tax Capacity (Improvements): ${tc_df['TaxCapacity_Improvements'].sum():>15,.0f}")
+        print(f"  Tax Capacity (Land):         ${tc_df['TaxCapacity_Land'].sum():>15,.0f}")
+        print(f"  Land % of Tax Capacity:      {tc_df['TaxCapacity_Land'].sum() / tc_df['TaxCapacity'].sum() * 100:.1f}%")
+
+        tc_land_improvement_ratio = 4
+        tc_land_millage, tc_imp_millage, tc_split_rate_revenue, tc_df = model_split_rate_tax(
+            df=tc_df,
+            land_value_col="TaxCapacity_Land",
+            improvement_value_col="TaxCapacity_Improvements",
+            current_revenue=current_revenue,
+            land_improvement_ratio=tc_land_improvement_ratio,
+        )
+
+        tc_df["new_tax_tc"] = tc_df["new_tax"]
+        tc_df["tax_change_tc"] = tc_df["new_tax_tc"] - tc_df["current_tax"]
+        tc_df["tax_change_pct_tc"] = np.where(
+            tc_df["current_tax"] > 0,
+            (tc_df["tax_change_tc"] / tc_df["current_tax"]) * 100,
+            0,
+        )
+
+        print(f"\\nFull-Bill Split-Rate Model ({tc_land_improvement_ratio}:1 ratio)")
+        print(f"  Land Millage:        {tc_land_millage:.6f}")
+        print(f"  Improvement Millage: {tc_imp_millage:.6f}")
+        print(f"  Current Revenue:     ${current_revenue:,.0f}")
+        print(f"  New Revenue:         ${tc_df['new_tax_tc'].sum():,.0f}")
+        print(f"  Revenue neutral:     {abs(current_revenue - tc_df['new_tax_tc'].sum()) < 1}")
+
+        tc_df["LAND_DEV_CATEGORY"] = np.where(tc_df["IR"] == 0, "Vacant Land", "Developed")
+        vacant_results = analyze_vacant_land(
+            df=tc_df,
+            land_value_col="LANDASD",
+            improvement_value_col="IMPASD",
+            property_type_col="LAND_DEV_CATEGORY",
+            vacant_identifier="Vacant Land",
+        )
+        underdeveloped = analyze_land_by_improvement_share(
+            df=tc_df,
+            land_value_col="LANDASD",
+            improvement_value_col="IMPASD",
+        )
+
+        print("\\nUndeveloped and Underdeveloped Land")
+        print(f"  Total non-exempt land assessed value: ${underdeveloped['total_adjusted_land_value']:,.0f}\\n")
+        if "error" not in vacant_results:
+            print("  Undeveloped (vacant, IR=0):")
+            print(f"    {vacant_results['total_vacant_parcels']:,} parcels")
+            print(f"    ${vacant_results['total_vacant_land_value']:,.0f} ({vacant_results['vacant_land_pct_of_total']:.1f}% of non-exempt land value)\\n")
+
+        print("  Underdeveloped (by improvement share):")
+        for row in underdeveloped["categories"][:4]:
+            print(
+                f"    {row['category']:<35} {row['parcel_count']:>7,} parcels  "
+                f"${row['adjusted_land_value']:>15,.0f}  ({row['share_of_total_land_value_pct']:.1f}%)"
+            )
+        """
+    ),
     md("## Step 6: Category Summary & Charts"),
     code(
         """
