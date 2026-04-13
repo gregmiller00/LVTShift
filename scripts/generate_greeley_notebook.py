@@ -248,12 +248,16 @@ cells = [
 
         gdf["PROPERTY_CATEGORY"] = gdf["ACCTTYPE"].apply(map_property_category)
         display(gdf["PROPERTY_CATEGORY"].value_counts().to_frame("parcel_count"))
+
+        analysis_gdf = gdf[gdf["PROPERTY_CATEGORY"] != "Exempt / Government"].copy()
+        print(f"Excluded exempt/government parcels: {len(gdf) - len(analysis_gdf):,}")
+        print(f"Parcels used for modeling/analysis: {len(analysis_gdf):,}")
         """
     ),
     md("## Step 4: Revenue-neutral split-rate scenarios (starter)"),
     code(
         """
-        model_df = gdf.copy()
+        model_df = analysis_gdf.copy()
         model_df["current_tax_proxy"] = model_df["TOTALASD"] / 1000.0
         model_df["current_tax"] = model_df["current_tax_proxy"]
         current_revenue = model_df["current_tax"].sum()
