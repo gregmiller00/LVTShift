@@ -254,6 +254,43 @@ cells = [
         print(f"Parcels used for modeling/analysis: {len(analysis_gdf):,}")
         """
     ),
+    md("## Step 3b: Export mapping-ready GeoParquet"),
+    code(
+        """
+        mapping_export = analysis_gdf.copy()
+        mapping_export["land_size_acres"] = pd.to_numeric(mapping_export.get("GIS_Acres", 0), errors="coerce").fillna(0)
+        mapping_export["building_size_sqft"] = pd.to_numeric(mapping_export.get("BUILDING_SQFT", np.nan), errors="coerce")
+        mapping_export["market_land_value"] = pd.to_numeric(mapping_export.get("LANDACT", 0), errors="coerce").fillna(0)
+        mapping_export["market_building_value"] = pd.to_numeric(mapping_export.get("IMPACT", 0), errors="coerce").fillna(0)
+        mapping_export["market_total_value"] = mapping_export["market_land_value"] + mapping_export["market_building_value"]
+        mapping_export["latest_sale_price"] = pd.to_numeric(mapping_export.get("SALEP", np.nan), errors="coerce")
+
+        export_cols = [
+            "PARCEL",
+            "ACCOUNTNO",
+            "ACCTTYPE",
+            "ASSRCODE",
+            "PROPERTY_CATEGORY",
+            "land_size_acres",
+            "building_size_sqft",
+            "market_land_value",
+            "market_building_value",
+            "market_total_value",
+            "latest_sale_price",
+            "geometry",
+        ]
+        export_gdf = mapping_export[export_cols].copy()
+        export_gdf = export_gdf.to_crs(epsg=3857)
+
+        mapping_path = data_dir / "greeley_mapping_ready_20260413.gpq"
+        export_gdf.to_parquet(mapping_path, index=False)
+
+        print(f"Wrote mapping GeoParquet: {mapping_path}")
+        print(f"CRS: {export_gdf.crs}")
+        print(f"Rows: {len(export_gdf):,}")
+        display(export_gdf.head(5))
+        """
+    ),
     md("## Step 4: Revenue-neutral split-rate scenarios (starter)"),
     code(
         """
