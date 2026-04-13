@@ -246,7 +246,8 @@ cells = [
         """
         model_df = gdf.copy()
         model_df["current_tax_proxy"] = model_df["TOTALASD"] / 1000.0
-        current_revenue = model_df["current_tax_proxy"].sum()
+        model_df["current_tax"] = model_df["current_tax_proxy"]
+        current_revenue = model_df["current_tax"].sum()
 
         scenario_outputs = {}
         for ratio in [2, 4, 8]:
@@ -258,7 +259,7 @@ cells = [
                 land_improvement_ratio=ratio,
             )
             new_col = f"tax_shift_{ratio}to1"
-            scenario_df[new_col] = scenario_df["new_tax"] - scenario_df["current_tax_proxy"]
+            scenario_df[new_col] = scenario_df["new_tax"] - scenario_df["current_tax"]
             scenario_outputs[ratio] = {
                 "land_mill": land_mill,
                 "imp_mill": imp_mill,
@@ -275,7 +276,7 @@ cells = [
         summary = calculate_category_tax_summary(
             df=primary,
             category_col="PROPERTY_CATEGORY",
-            current_tax_col="current_tax_proxy",
+            current_tax_col="current_tax",
             new_tax_col="new_tax",
         )
         print_category_tax_summary(summary)
