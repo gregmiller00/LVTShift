@@ -91,6 +91,7 @@ cells = [
         osm_surface_parking_cache = data_dir / "greeley_osm_surface_parking_20260413.parquet"
         zoning_cache = data_dir / "greeley_zoning_20260413.parquet"
         zoning_item_id = "9074f41dfaa346bba43115abb4e2ac9a"
+        zoning_query_url = "https://gis.greeleygov.com/arcgis_svr/rest/services/Data_services/Zoning/MapServer/2/query"
 
         attr_fields = [
             "OBJECTID", "PARCEL", "ACCOUNTNO", "ACCTTYPE", "ACCOUNTTYP", "NAME", "SITUS", "LOCCITY", "LEGAL",
@@ -294,12 +295,13 @@ cells = [
             return None
 
 
-        def fetch_arcgis_geojson(query_url, where="1=1", chunk_size=2000):
+        def fetch_arcgis_geojson(query_url, where="1=1", chunk_size=2000, headers=None):
             session = requests.Session()
             count_resp = session.get(
                 query_url,
                 params={"f": "json", "where": where, "returnCountOnly": "true"},
                 timeout=60,
+                headers=headers,
             )
             count_resp.raise_for_status()
             total_records = int(count_resp.json().get("count", 0))
@@ -313,7 +315,7 @@ cells = [
                     "resultRecordCount": chunk_size,
                     "outSR": 4326,
                 }
-                resp = session.get(query_url, params=params, timeout=180)
+                resp = session.get(query_url, params=params, timeout=180, headers=headers)
                 resp.raise_for_status()
                 gj = resp.json()
                 feats = gj.get("features", [])
@@ -330,12 +332,26 @@ cells = [
                 print(f"Loading zoning cache: {zoning_cache.name}")
                 return gpd.read_parquet(zoning_cache)
 
-            query_url = resolve_zoning_query_url(zoning_item_id)
+            zone_headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; LVTShift/1.0; +https://github.com/Center-for-Land-Economics)",
+                "Referer": "https://gis.greeleygov.com/",
+                "Origin": "https://gis.greeleygov.com",
+            }
+
+            query_url = zoning_query_url
+            try:
+                zoning_gdf = fetch_arcgis_geojson(query_url=query_url, where="1=1", chunk_size=2000, headers=zone_headers)
+            except Exception as exc:
+                print(f"Warning: direct zoning endpoint failed ({exc}); trying ArcGIS item metadata fallback.")
+                query_url = resolve_zoning_query_url(zoning_item_id)
+                zoning_gdf = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+                if query_url is not None:
+                    zoning_gdf = fetch_arcgis_geojson(query_url=query_url, where="1=1", chunk_size=2000, headers=zone_headers)
+
             if query_url is None:
                 print("Warning: Could not resolve zoning layer URL from ArcGIS item metadata.")
                 return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
 
-            zoning_gdf = fetch_arcgis_geojson(query_url=query_url, where="1=1", chunk_size=2000)
             if len(zoning_gdf) == 0:
                 print("Warning: Zoning query returned zero records.")
                 return zoning_gdf
