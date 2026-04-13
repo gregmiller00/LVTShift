@@ -279,6 +279,7 @@ cells = [
             print(f"{ratio}:1 split -> land mill {land_mill:.4f}, imp mill {imp_mill:.4f}, revenue {revenue:,.2f}")
         """
     ),
+    md("## Step 6: Category Summary & Charts"),
     code(
         """
         primary = scenario_outputs[4]["df"].copy()
@@ -289,30 +290,82 @@ cells = [
             0,
         )
 
-        summary = calculate_category_tax_summary(
+        output_summary = calculate_category_tax_summary(
             df=primary,
             category_col="PROPERTY_CATEGORY",
             current_tax_col="current_tax",
             new_tax_col="new_tax",
         )
-        print_category_tax_summary(summary)
+        print_category_tax_summary(output_summary)
 
         plot_df = (
-            primary.groupby("PROPERTY_CATEGORY", as_index=False)["tax_shift_4to1"]
-            .mean()
-            .sort_values("tax_shift_4to1")
+            output_summary[output_summary["property_count"] > 50]
+            .sort_values("median_tax_change_pct")
+            .copy()
         )
-        plt.figure(figsize=(10, 5))
-        sns.barplot(data=plot_df, x="tax_shift_4to1", y="PROPERTY_CATEGORY", color="#2a6fbb")
+
+        fig_height = max(5, len(plot_df) * 0.7)
+        plt.figure(figsize=(12, fig_height))
+        bar_colors = np.where(plot_df["median_tax_change_pct"] < 0, "#228B22", "#8B0000")
+        plt.barh(plot_df["PROPERTY_CATEGORY"], plot_df["median_tax_change_pct"], color=bar_colors)
         plt.axvline(0, color="black", linewidth=1)
-        plt.title("Average parcel tax change by category (4:1 split, proxy baseline)")
-        plt.xlabel("Average tax change")
+        plt.title("Median tax change percent by property category (4:1 split)")
+        plt.xlabel("Median tax change (%)")
         plt.ylabel("Property category")
         plt.tight_layout()
         plt.show()
         """
     ),
-    md("## Step 5: Land-use diagnostics (vacancy, parking, low-improvement share)"),
+    code(
+        """
+        # Butterfly chart: percent of parcels increasing/decreasing >10%
+        summary_filtered = output_summary[output_summary["property_count"] > 50].copy()
+        summary_sorted = summary_filtered.sort_values("pct_increase_gt_threshold", ascending=True)
+
+        categories_sorted = summary_sorted["PROPERTY_CATEGORY"].tolist()
+        pct_increase_sorted = summary_sorted["pct_increase_gt_threshold"].tolist()
+        pct_decrease_sorted = summary_sorted["pct_decrease_gt_threshold"].tolist()
+
+        pct_increase_int = [int(round(x)) for x in pct_increase_sorted]
+        pct_decrease_int = [int(round(x)) for x in pct_decrease_sorted]
+
+        y = np.arange(len(categories_sorted))
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        color_increase = "#8B0000"
+        color_decrease = "#228B22"
+
+        ax.barh(y, [-v for v in pct_decrease_sorted], color=color_decrease, edgecolor="none", height=0.7)
+        ax.barh(y, pct_increase_sorted, color=color_increase, edgecolor="none", height=0.7)
+
+        for i, (inc, dec) in enumerate(zip(pct_increase_int, pct_decrease_int)):
+            if dec > 0:
+                ax.text(-dec - 2, y[i], f"{dec}%", va="center", ha="right", fontsize=8, color=color_decrease)
+            if inc > 0:
+                ax.text(inc + 2, y[i], f"{inc}%", va="center", ha="left", fontsize=8, color=color_increase)
+
+        for i, (cat, inc) in enumerate(zip(categories_sorted, pct_increase_sorted)):
+            xpos = inc + 18 if inc > 0 else 18
+            ax.text(xpos, y[i], cat, va="center", ha="left", fontsize=9, fontweight="bold", color="#222")
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+        ax.set_yticks([])
+        ax.set_xticks([])
+
+        max_val = max(max(pct_increase_sorted), max(pct_decrease_sorted)) if len(pct_increase_sorted) else 10
+        ax.set_xlim(-max_val - 20, max_val + 48)
+
+        title_y = len(categories_sorted) - 0.2
+        ax.text(-max_val * 0.45, title_y, "Percent of parcels\\ndecreasing >10%", ha="center", va="bottom", fontsize=10)
+        ax.text(max_val * 0.45, title_y, "Percent of parcels\\nincreasing >10%", ha="center", va="bottom", fontsize=10)
+
+        plt.tight_layout()
+        plt.show()
+        """
+    ),
+    md("## Step 7: Land-use diagnostics (vacancy, parking, low-improvement share)"),
     code(
         """
         analysis_df = primary.copy()
@@ -354,7 +407,7 @@ cells = [
         display(pd.DataFrame(low_impr_share["categories"]))
         """
     ),
-    md("## Step 6: Tax-shift distribution and high-impact parcels"),
+    md("## Step 7b: Tax-shift distribution and high-impact parcels"),
     code(
         """
         plt.figure(figsize=(10, 5))
@@ -379,7 +432,7 @@ cells = [
         display(top_decrease)
         """
     ),
-    md("## Step 7: Census equity analysis (Weld County block groups, FIPS 08123)"),
+    md("## Step 8: Census Equity Analysis"),
     code(
         """
         equity_df = primary.copy()
@@ -393,39 +446,83 @@ cells = [
             matched = match_to_census_blockgroups(equity_df, census_boundaries, join_type="left")
             matched = matched[matched["median_income"] > 0].copy()
 
+            block_group_summary = (
+                matched.groupby("std_geoid")
+                .agg(
+                    median_income=("median_income", "first"),
+                    minority_pct=("minority_pct", "first"),
+                    total_current_tax=("current_tax", "sum"),
+                    total_new_tax=("new_tax", "sum"),
+                    mean_tax_change=("tax_change", "mean"),
+                    median_tax_change=("tax_change", "median"),
+                    median_tax_change_pct=("tax_change_pct", "median"),
+                    parcel_count=("PARCEL", "count"),
+                    has_vacant_land=("PROPERTY_CATEGORY", lambda x: (x == "Vacant / Undeveloped").any()),
+                )
+                .reset_index()
+            )
+            block_group_summary = block_group_summary[block_group_summary["median_income"] > 0].copy()
+            block_group_summary["mean_tax_change_pct"] = np.where(
+                block_group_summary["total_current_tax"] > 0,
+                ((block_group_summary["total_new_tax"] - block_group_summary["total_current_tax"]) / block_group_summary["total_current_tax"]) * 100,
+                0,
+            )
+
+            non_vacant_bg = block_group_summary[~block_group_summary["has_vacant_land"]].copy()
+
             income_quintile_summary = create_quintile_summary(
-                matched,
+                block_group_summary,
                 group_col="median_income",
                 value_col="median_income",
-                tax_change_col="tax_change",
-                tax_change_pct_col="tax_change_pct",
+                tax_change_col="mean_tax_change",
+                tax_change_pct_col="mean_tax_change_pct",
+            )
+            non_vacant_income_quintile_summary = create_quintile_summary(
+                non_vacant_bg,
+                group_col="median_income",
+                value_col="median_income",
+                tax_change_col="mean_tax_change",
+                tax_change_pct_col="mean_tax_change_pct",
             )
             minority_quintile_summary = create_quintile_summary(
-                matched,
+                block_group_summary,
                 group_col="minority_pct",
                 value_col="minority_pct",
-                tax_change_col="tax_change",
-                tax_change_pct_col="tax_change_pct",
+                tax_change_col="mean_tax_change",
+                tax_change_pct_col="mean_tax_change_pct",
+            )
+            non_vacant_minority_quintile_summary = create_quintile_summary(
+                non_vacant_bg,
+                group_col="minority_pct",
+                value_col="minority_pct",
+                tax_change_col="mean_tax_change",
+                tax_change_pct_col="mean_tax_change_pct",
             )
 
             display(income_quintile_summary)
+            display(non_vacant_income_quintile_summary)
             display(minority_quintile_summary)
+            display(non_vacant_minority_quintile_summary)
 
             plt.figure(figsize=(10, 5))
-            plt.plot(income_quintile_summary["median_income_quintile"], income_quintile_summary["mean_tax_change_pct"], marker="o")
+            plt.plot(income_quintile_summary["median_income_quintile"], income_quintile_summary["mean_tax_change_pct"], marker="o", label="All properties")
+            plt.plot(non_vacant_income_quintile_summary["median_income_quintile"], non_vacant_income_quintile_summary["mean_tax_change_pct"], marker="o", label="Excluding vacant-land neighborhoods")
             plt.axhline(0, color="black", linewidth=1, linestyle="dotted")
             plt.title("Mean tax change percent by neighborhood income quintile")
             plt.xlabel("Income quintile")
             plt.ylabel("Mean tax change (%)")
+            plt.legend()
             plt.tight_layout()
             plt.show()
 
             plt.figure(figsize=(10, 5))
-            plt.plot(minority_quintile_summary["minority_pct_quintile"], minority_quintile_summary["mean_tax_change_pct"], marker="o")
+            plt.plot(minority_quintile_summary["minority_pct_quintile"], minority_quintile_summary["mean_tax_change_pct"], marker="o", label="All properties")
+            plt.plot(non_vacant_minority_quintile_summary["minority_pct_quintile"], non_vacant_minority_quintile_summary["mean_tax_change_pct"], marker="o", label="Excluding vacant-land neighborhoods")
             plt.axhline(0, color="black", linewidth=1, linestyle="dotted")
             plt.title("Mean tax change percent by minority-share quintile")
             plt.xlabel("Minority-share quintile")
             plt.ylabel("Mean tax change (%)")
+            plt.legend()
             plt.tight_layout()
             plt.show()
         except Exception as exc:
