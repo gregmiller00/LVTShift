@@ -401,8 +401,18 @@ cells = [
         if len(zoning_gdf) > 0:
             gdf_3857 = gdf.to_crs(epsg=3857)
             zoning_3857 = zoning_gdf.to_crs(epsg=3857)
+            gdf_3857["PARCEL_OID"] = gdf_3857["OBJECTID"]
             gdf_3857["centroid"] = gdf_3857.geometry.centroid
-            parcel_pts = gpd.GeoDataFrame(gdf_3857.drop(columns=["geometry"]), geometry="centroid", crs="EPSG:3857")
+            parcel_pts = gpd.GeoDataFrame(
+                gdf_3857.drop(columns=["geometry"]),
+                geometry="centroid",
+                crs="EPSG:3857",
+            )
+
+            if "OBJECTID" in zoning_3857.columns:
+                zoning_3857 = zoning_3857.rename(columns={"OBJECTID": "ZONING_OID"})
+            else:
+                zoning_3857["ZONING_OID"] = np.arange(len(zoning_3857), dtype=int)
 
             join_cols = [c for c in zoning_3857.columns if c != "geometry"]
             stamped = gpd.sjoin(parcel_pts, zoning_3857[join_cols + ["geometry"]], how="left", predicate="within")
@@ -416,7 +426,7 @@ cells = [
                 chosen = fallback_cols[0] if fallback_cols else None
 
             if chosen is not None:
-                zone_by_objectid = stamped.groupby("OBJECTID")[chosen].first()
+                zone_by_objectid = stamped.groupby("PARCEL_OID")[chosen].first()
                 gdf["ZONING_CLASS"] = gdf["OBJECTID"].map(zone_by_objectid)
             else:
                 gdf["ZONING_CLASS"] = None
