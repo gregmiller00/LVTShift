@@ -62,6 +62,15 @@ cells = [
             model_split_rate_tax,
             print_category_tax_summary,
         )
+        from policy_analysis import (
+            analyze_land_by_improvement_share,
+            analyze_parking_lots,
+            analyze_vacant_land,
+            print_parking_analysis_summary,
+            print_vacant_land_summary,
+        )
+        from census_utils import get_census_data_with_boundaries, match_to_census_blockgroups
+        from viz import create_quintile_summary
 
         sns.set_theme(style="whitegrid")
         pd.set_option("display.max_columns", 200)
@@ -273,6 +282,13 @@ cells = [
     code(
         """
         primary = scenario_outputs[4]["df"].copy()
+        primary["tax_change"] = primary["new_tax"] - primary["current_tax"]
+        primary["tax_change_pct"] = np.where(
+            primary["current_tax"] > 0,
+            (primary["tax_change"] / primary["current_tax"]) * 100,
+            0,
+        )
+
         summary = calculate_category_tax_summary(
             df=primary,
             category_col="PROPERTY_CATEGORY",
@@ -294,6 +310,127 @@ cells = [
         plt.ylabel("Property category")
         plt.tight_layout()
         plt.show()
+        """
+    ),
+    md("## Step 5: Land-use diagnostics (vacancy, parking, low-improvement share)"),
+    code(
+        """
+        analysis_df = primary.copy()
+        analysis_df["LAND_USE_FOR_ANALYSIS"] = np.select(
+            [
+                analysis_df["ACCTTYPE"].astype(str).str.upper().str.contains("VAC", na=False),
+                analysis_df["ACCTTYPE"].astype(str).str.upper().str.contains("PARK", na=False),
+            ],
+            ["Vacant Land", "Trans - Parking"],
+            default="Other",
+        )
+
+        vacant_results = analyze_vacant_land(
+            df=analysis_df,
+            land_value_col="LANDASD",
+            improvement_value_col="IMPASD",
+            property_type_col="LAND_USE_FOR_ANALYSIS",
+            vacant_identifier="Vacant Land",
+            owner_col="NAME",
+        )
+        print_vacant_land_summary(vacant_results)
+
+        parking_results = analyze_parking_lots(
+            df=analysis_df,
+            land_value_col="LANDASD",
+            improvement_value_col="IMPASD",
+            property_type_col="LAND_USE_FOR_ANALYSIS",
+            parking_identifier="Trans - Parking",
+            min_land_value_threshold=50000,
+            max_improvement_ratio=0.10,
+        )
+        print_parking_analysis_summary(parking_results)
+
+        low_impr_share = analyze_land_by_improvement_share(
+            df=analysis_df,
+            land_value_col="LANDASD",
+            improvement_value_col="IMPASD",
+        )
+        display(pd.DataFrame(low_impr_share["categories"]))
+        """
+    ),
+    md("## Step 6: Tax-shift distribution and high-impact parcels"),
+    code(
+        """
+        plt.figure(figsize=(10, 5))
+        sns.histplot(primary["tax_change"], bins=80, kde=True, color="#2a6fbb")
+        plt.axvline(0, color="black", linewidth=1)
+        plt.title("Distribution of parcel-level tax changes (4:1)")
+        plt.xlabel("Tax change")
+        plt.ylabel("Parcel count")
+        plt.tight_layout()
+        plt.show()
+
+        top_increase = primary.nlargest(20, "tax_change")[
+            ["PARCEL", "ACCOUNTNO", "ACCTTYPE", "LANDASD", "IMPASD", "current_tax", "new_tax", "tax_change", "tax_change_pct"]
+        ]
+        top_decrease = primary.nsmallest(20, "tax_change")[
+            ["PARCEL", "ACCOUNTNO", "ACCTTYPE", "LANDASD", "IMPASD", "current_tax", "new_tax", "tax_change", "tax_change_pct"]
+        ]
+
+        print("Top 20 increases")
+        display(top_increase)
+        print("Top 20 decreases")
+        display(top_decrease)
+        """
+    ),
+    md("## Step 7: Census equity analysis (Weld County block groups, FIPS 08123)"),
+    code(
+        """
+        equity_df = primary.copy()
+        equity_df = equity_df.to_crs(epsg=4326)
+
+        try:
+            census_data, census_boundaries = get_census_data_with_boundaries(
+                fips_code="08123",
+                year=2022,
+            )
+            matched = match_to_census_blockgroups(equity_df, census_boundaries, join_type="left")
+            matched = matched[matched["median_income"] > 0].copy()
+
+            income_quintile_summary = create_quintile_summary(
+                matched,
+                group_col="median_income",
+                value_col="median_income",
+                tax_change_col="tax_change",
+                tax_change_pct_col="tax_change_pct",
+            )
+            minority_quintile_summary = create_quintile_summary(
+                matched,
+                group_col="minority_pct",
+                value_col="minority_pct",
+                tax_change_col="tax_change",
+                tax_change_pct_col="tax_change_pct",
+            )
+
+            display(income_quintile_summary)
+            display(minority_quintile_summary)
+
+            plt.figure(figsize=(10, 5))
+            plt.plot(income_quintile_summary["median_income_quintile"], income_quintile_summary["mean_tax_change_pct"], marker="o")
+            plt.axhline(0, color="black", linewidth=1, linestyle="dotted")
+            plt.title("Mean tax change percent by neighborhood income quintile")
+            plt.xlabel("Income quintile")
+            plt.ylabel("Mean tax change (%)")
+            plt.tight_layout()
+            plt.show()
+
+            plt.figure(figsize=(10, 5))
+            plt.plot(minority_quintile_summary["minority_pct_quintile"], minority_quintile_summary["mean_tax_change_pct"], marker="o")
+            plt.axhline(0, color="black", linewidth=1, linestyle="dotted")
+            plt.title("Mean tax change percent by minority-share quintile")
+            plt.xlabel("Minority-share quintile")
+            plt.ylabel("Mean tax change (%)")
+            plt.tight_layout()
+            plt.show()
+        except Exception as exc:
+            print("Census equity analysis skipped:", exc)
+            print("Set CENSUS_API_KEY in .env (or pass api_key) and rerun this cell.")
         """
     ),
 ]
