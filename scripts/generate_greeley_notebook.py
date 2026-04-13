@@ -48,7 +48,7 @@ cells = [
         import pandas as pd
         import requests
         import seaborn as sns
-        from shapely.geometry import Polygon
+        from shapely.geometry import Point, Polygon
 
         REPO_ROOT = Path.cwd()
         if not (REPO_ROOT / "lvt_utils.py").exists():
@@ -88,6 +88,7 @@ cells = [
 
         attrs_cache = data_dir / "greeley_attrs_20260413.parquet"
         geometry_cache = data_dir / "greeley_geometry_20260413.parquet"
+        osm_surface_parking_cache = data_dir / "greeley_osm_surface_parking_20260413.parquet"
 
         attr_fields = [
             "OBJECTID", "PARCEL", "ACCOUNTNO", "ACCTTYPE", "ACCOUNTTYP", "NAME", "SITUS", "LOCCITY", "LEGAL",
@@ -187,6 +188,61 @@ cells = [
             gdf.to_parquet(geometry_cache, index=False)
             print(f"Saved geometry cache: {geometry_cache.name}")
             return gdf
+
+
+        def fetch_osm_surface_parking(bounds):
+            minx, miny, maxx, maxy = bounds
+            query = f'''
+            [out:json][timeout:120];
+            (
+              way["amenity"="parking"]["parking"="surface"]({miny},{minx},{maxy},{maxx});
+              relation["amenity"="parking"]["parking"="surface"]({miny},{minx},{maxy},{maxx});
+              node["amenity"="parking"]["parking"="surface"]({miny},{minx},{maxy},{maxx});
+            );
+            out body geom;
+            '''
+            resp = requests.get("https://overpass-api.de/api/interpreter", params={"data": query}, timeout=180)
+            resp.raise_for_status()
+            payload = resp.json()
+
+            rows = []
+            for el in payload.get("elements", []):
+                tags = el.get("tags", {})
+                geom = None
+                if "geometry" in el and len(el["geometry"]) >= 3:
+                    coords = [(p["lon"], p["lat"]) for p in el["geometry"]]
+                    try:
+                        geom = Polygon(coords)
+                    except Exception:
+                        geom = None
+                elif "lat" in el and "lon" in el:
+                    geom = Point(el["lon"], el["lat"])
+                if geom is None:
+                    continue
+                rows.append(
+                    {
+                        "osm_id": el.get("id"),
+                        "osm_type": el.get("type"),
+                        "amenity": tags.get("amenity"),
+                        "parking": tags.get("parking"),
+                        "name": tags.get("name"),
+                        "geometry": geom,
+                    }
+                )
+
+            if not rows:
+                return gpd.GeoDataFrame(columns=["osm_id", "osm_type", "amenity", "parking", "name", "geometry"], geometry="geometry", crs="EPSG:4326")
+            return gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
+
+
+        def load_osm_surface_parking(bounds):
+            if osm_surface_parking_cache.exists():
+                print(f"Loading OSM surface parking cache: {osm_surface_parking_cache.name}")
+                return gpd.read_parquet(osm_surface_parking_cache)
+            osm_gdf = fetch_osm_surface_parking(bounds)
+            osm_gdf.to_parquet(osm_surface_parking_cache, index=False)
+            print(f"Saved OSM surface parking cache: {osm_surface_parking_cache.name}")
+            return osm_gdf
         """
     ),
     md("## Step 1: Fetch and load Greeley parcels"),
@@ -199,6 +255,16 @@ cells = [
         gdf = gdf.drop_duplicates(subset=["OBJECTID"]).sort_values("OBJECTID").reset_index(drop=True)
         gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs="EPSG:4326")
 
+        osm_surface_parking = load_osm_surface_parking(gdf.total_bounds)
+        if len(osm_surface_parking) > 0:
+            gdf_3857 = gdf.to_crs(epsg=3857)
+            osm_3857 = osm_surface_parking.to_crs(epsg=3857)
+            joined = gpd.sjoin(gdf_3857[["OBJECTID", "geometry"]], osm_3857[["osm_id", "geometry"]], how="left", predicate="intersects")
+            parking_ids = set(joined.loc[joined["osm_id"].notna(), "OBJECTID"].tolist())
+            gdf["is_osm_surface_parking"] = gdf["OBJECTID"].isin(parking_ids)
+        else:
+            gdf["is_osm_surface_parking"] = False
+
         numeric_cols = [
             "LANDACT", "IMPACT", "TOTALACT", "LANDASD", "IMPASD", "TOTALASD", "LGLANDASD", "LGIMPASD",
             "TOTALLGASD", "SCLANDASD", "SCIMPASD", "TOTALSCASD", "SALEP", "GIS_Acres",
@@ -208,7 +274,8 @@ cells = [
                 gdf[col] = pd.to_numeric(gdf[col], errors="coerce").fillna(0)
 
         print(gdf.shape)
-        display(gdf[["PARCEL", "ACCOUNTNO", "ACCTTYPE", "LOCCITY", "LANDACT", "IMPACT", "TOTALACT"]].head(5))
+        print(f"OSM surface-parking tagged parcels: {int(gdf['is_osm_surface_parking'].sum()):,}")
+        display(gdf[["PARCEL", "ACCOUNTNO", "ACCTTYPE", "LOCCITY", "is_osm_surface_parking", "LANDACT", "IMPACT", "TOTALACT"]].head(5))
         """
     ),
     md("## Step 2: Basic quality checks and helper fields"),
@@ -271,6 +338,7 @@ cells = [
             "ACCTTYPE",
             "ASSRCODE",
             "PROPERTY_CATEGORY",
+            "is_osm_surface_parking",
             "land_size_acres",
             "building_size_sqft",
             "market_land_value",
@@ -280,9 +348,9 @@ cells = [
             "geometry",
         ]
         export_gdf = mapping_export[export_cols].copy()
-        export_gdf = export_gdf.to_crs(epsg=3857)
+        export_gdf = export_gdf.to_crs(epsg=4326)
 
-        mapping_path = data_dir / "greeley_mapping_ready_20260413.gpq"
+        mapping_path = data_dir / "greeley_mapping_ready_20260413.parquet"
         export_gdf.to_parquet(mapping_path, index=False)
 
         print(f"Wrote mapping GeoParquet: {mapping_path}")
@@ -484,7 +552,7 @@ cells = [
         analysis_df["LAND_USE_FOR_ANALYSIS"] = np.select(
             [
                 analysis_df["ACCTTYPE"].astype(str).str.upper().str.contains("VAC", na=False),
-                analysis_df["ACCTTYPE"].astype(str).str.upper().str.contains("PARK", na=False),
+                analysis_df["is_osm_surface_parking"] == True,
             ],
             ["Vacant Land", "Trans - Parking"],
             default="Other",
