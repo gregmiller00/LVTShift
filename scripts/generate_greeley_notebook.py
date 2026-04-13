@@ -192,47 +192,75 @@ cells = [
 
         def fetch_osm_surface_parking(bounds):
             minx, miny, maxx, maxy = bounds
-            query = f'''
-            [out:json][timeout:120];
-            (
-              way["amenity"="parking"]["parking"="surface"]({miny},{minx},{maxy},{maxx});
-              relation["amenity"="parking"]["parking"="surface"]({miny},{minx},{maxy},{maxx});
-              node["amenity"="parking"]["parking"="surface"]({miny},{minx},{maxy},{maxx});
-            );
-            out body geom;
-            '''
-            resp = requests.get("https://overpass-api.de/api/interpreter", params={"data": query}, timeout=180)
-            resp.raise_for_status()
-            payload = resp.json()
+            endpoints = [
+                "https://overpass-api.de/api/interpreter",
+                "https://lz4.overpass-api.de/api/interpreter",
+            ]
+
+            def fetch_tile(tile_bounds):
+                tx_minx, tx_miny, tx_maxx, tx_maxy = tile_bounds
+                query = f'''
+                [out:json][timeout:120];
+                (
+                  way["amenity"="parking"]["parking"="surface"]({tx_miny},{tx_minx},{tx_maxy},{tx_maxx});
+                  relation["amenity"="parking"]["parking"="surface"]({tx_miny},{tx_minx},{tx_maxy},{tx_maxx});
+                  node["amenity"="parking"]["parking"="surface"]({tx_miny},{tx_minx},{tx_maxy},{tx_maxx});
+                );
+                out body geom;
+                '''
+                last_err = None
+                for endpoint in endpoints:
+                    for attempt in range(3):
+                        try:
+                            resp = requests.get(endpoint, params={"data": query}, timeout=240)
+                            resp.raise_for_status()
+                            return resp.json()
+                        except Exception as exc:
+                            last_err = exc
+                print(f"Warning: OSM Overpass tile failed {tile_bounds}: {last_err}")
+                return {"elements": []}
+
+            midx = (minx + maxx) / 2
+            midy = (miny + maxy) / 2
+            tiles = [
+                (minx, miny, midx, midy),
+                (midx, miny, maxx, midy),
+                (minx, midy, midx, maxy),
+                (midx, midy, maxx, maxy),
+            ]
 
             rows = []
-            for el in payload.get("elements", []):
-                tags = el.get("tags", {})
-                geom = None
-                if "geometry" in el and len(el["geometry"]) >= 3:
-                    coords = [(p["lon"], p["lat"]) for p in el["geometry"]]
-                    try:
-                        geom = Polygon(coords)
-                    except Exception:
-                        geom = None
-                elif "lat" in el and "lon" in el:
-                    geom = Point(el["lon"], el["lat"])
-                if geom is None:
-                    continue
-                rows.append(
-                    {
-                        "osm_id": el.get("id"),
-                        "osm_type": el.get("type"),
-                        "amenity": tags.get("amenity"),
-                        "parking": tags.get("parking"),
-                        "name": tags.get("name"),
-                        "geometry": geom,
-                    }
-                )
+            for tile in tiles:
+                payload = fetch_tile(tile)
+                for el in payload.get("elements", []):
+                    tags = el.get("tags", {})
+                    geom = None
+                    if "geometry" in el and len(el["geometry"]) >= 3:
+                        coords = [(p["lon"], p["lat"]) for p in el["geometry"]]
+                        try:
+                            geom = Polygon(coords)
+                        except Exception:
+                            geom = None
+                    elif "lat" in el and "lon" in el:
+                        geom = Point(el["lon"], el["lat"])
+                    if geom is None:
+                        continue
+                    rows.append(
+                        {
+                            "osm_id": el.get("id"),
+                            "osm_type": el.get("type"),
+                            "amenity": tags.get("amenity"),
+                            "parking": tags.get("parking"),
+                            "name": tags.get("name"),
+                            "geometry": geom,
+                        }
+                    )
 
             if not rows:
                 return gpd.GeoDataFrame(columns=["osm_id", "osm_type", "amenity", "parking", "name", "geometry"], geometry="geometry", crs="EPSG:4326")
-            return gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
+            osm_gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
+            osm_gdf = osm_gdf.drop_duplicates(subset=["osm_type", "osm_id"]).reset_index(drop=True)
+            return osm_gdf
 
 
         def load_osm_surface_parking(bounds):
