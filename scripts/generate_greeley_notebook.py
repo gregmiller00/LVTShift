@@ -525,6 +525,100 @@ cells = [
             plt.legend()
             plt.tight_layout()
             plt.show()
+
+            # Inverted bar charts: median tax change by quintile (excluding vacant-land neighborhoods)
+            sns.set_theme(style="whitegrid", font_scale=1.15)
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            vals = non_vacant_income_quintile_summary["median_tax_change_pct"]
+            labels = non_vacant_income_quintile_summary["median_income_quintile"]
+            colors = sns.color_palette("Greens", n_colors=len(vals))
+            color_map = [colors[i] for i in np.argsort(np.argsort(-vals))]
+            bars = ax.bar(labels, vals, color=color_map, edgecolor="black", width=0.7)
+            ax.yaxis.set_visible(False)
+            ax.set_title("Median Tax Change by Neighborhood Income (Excl. Vacant)", weight="bold", pad=30)
+            sns.despine(left=True, right=True, top=True, bottom=True)
+            for bar, val in zip(bars, vals):
+                ax.annotate(f"{val:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, val / 2), ha="center", va="center", fontsize=13, fontweight="bold")
+            ax.xaxis.set_ticks_position("top")
+            ax.xaxis.set_label_position("top")
+            plt.xticks(fontweight="bold")
+            margin = max(abs(vals.min()), abs(vals.max())) * 1.2 if len(vals) else 1
+            ax.set_ylim(-margin, margin)
+            ax.axhline(y=0, color="black", linewidth=0.8)
+            plt.tight_layout()
+            plt.show()
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            vals = non_vacant_minority_quintile_summary["median_tax_change_pct"]
+            labels = non_vacant_minority_quintile_summary["minority_pct_quintile"]
+            colors = sns.color_palette("Purples", n_colors=len(vals))
+            color_map = [colors[i] for i in np.argsort(np.argsort(-vals))]
+            bars = ax.bar(labels, vals, color=color_map, edgecolor="black", width=0.7)
+            ax.yaxis.set_visible(False)
+            ax.set_title("Median Tax Change by Neighborhood Minority % (Excl. Vacant)", weight="bold", pad=30)
+            sns.despine(left=True, right=True, top=True, bottom=True)
+            for bar, val in zip(bars, vals):
+                ax.annotate(f"{val:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, val / 2), ha="center", va="center", fontsize=13, fontweight="bold")
+            ax.xaxis.set_ticks_position("top")
+            ax.xaxis.set_label_position("top")
+            plt.xticks(fontweight="bold")
+            margin = max(abs(vals.min()), abs(vals.max())) * 1.2 if len(vals) else 1
+            ax.set_ylim(-margin, margin)
+            ax.axhline(y=0, color="black", linewidth=0.8)
+            plt.tight_layout()
+            plt.show()
+
+            # Additional St. Paul-style subgroup quintile charts
+            def render_quintile_bars(df_subset, title_prefix):
+                if len(df_subset) < 25:
+                    print(f"Skipping {title_prefix}: not enough parcels.")
+                    return
+                inc = create_quintile_summary(
+                    df_subset,
+                    group_col="median_income",
+                    value_col="median_income",
+                    tax_change_col="tax_change",
+                    tax_change_pct_col="tax_change_pct",
+                )
+                minor = create_quintile_summary(
+                    df_subset,
+                    group_col="minority_pct",
+                    value_col="minority_pct",
+                    tax_change_col="tax_change",
+                    tax_change_pct_col="tax_change_pct",
+                )
+                for summ, lbl_col, palette, ttl in [
+                    (inc, "median_income_quintile", "Greens", f"Median Tax Change by Neighborhood Income ({title_prefix})"),
+                    (minor, "minority_pct_quintile", "Purples", f"Median Tax Change by Neighborhood Minority % ({title_prefix})"),
+                ]:
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    vals = summ["median_tax_change_pct"]
+                    labels = summ[lbl_col]
+                    colors = sns.color_palette(palette, n_colors=len(vals))
+                    color_map = [colors[i] for i in np.argsort(np.argsort(-vals))]
+                    bars = ax.bar(labels, vals, color=color_map, edgecolor="black", width=0.7)
+                    ax.yaxis.set_visible(False)
+                    ax.set_title(ttl, weight="bold", pad=30)
+                    sns.despine(left=True, right=True, top=True, bottom=True)
+                    for bar, val in zip(bars, vals):
+                        ax.annotate(f"{val:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, val / 2), ha="center", va="center", fontsize=13, fontweight="bold")
+                    ax.xaxis.set_ticks_position("top")
+                    ax.xaxis.set_label_position("top")
+                    plt.xticks(fontweight="bold")
+                    margin = max(abs(vals.min()), abs(vals.max())) * 1.2 if len(vals) else 1
+                    ax.set_ylim(-margin, margin)
+                    ax.axhline(y=0, color="black", linewidth=0.8)
+                    plt.tight_layout()
+                    plt.show()
+
+            sfr = matched[matched["PROPERTY_CATEGORY"] == "Residential"].copy()
+            mfr = matched[matched["PROPERTY_CATEGORY"].isin(["Residential"])].copy()
+            smfr = matched[matched["PROPERTY_CATEGORY"].isin(["Residential"])].copy()
+
+            render_quintile_bars(sfr, "Residential Only")
+            render_quintile_bars(mfr, "Multifamily Proxy")
+            render_quintile_bars(smfr, "All Residential")
         except Exception as exc:
             print("Census equity analysis skipped:", exc)
             print("Set CENSUS_API_KEY in .env (or pass api_key) and rerun this cell.")
