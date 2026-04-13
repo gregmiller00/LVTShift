@@ -8,6 +8,21 @@ QUERY:   /query
 FORMAT:  f=json  (or f=geojson if you want geometry inline)
 ```
 
+## Zoning Layer (City of Greeley)
+
+```text
+PORTAL ITEM: https://open-data-greeley.hub.arcgis.com/maps/9074f41dfaa346bba43115abb4e2ac9a/about
+ITEM ID:     9074f41dfaa346bba43115abb4e2ac9a
+```
+
+Use the ArcGIS item metadata (`/sharing/rest/content/items/<item_id>/data?f=json`) to resolve the operational layer URL, then query its `/query` endpoint with `f=geojson`.
+
+Recommended notebook workflow:
+- Download zoning polygons and cache to `examples/data/greeley/greeley_zoning_<date>.parquet`
+- Spatially stamp each parcel (centroid-within polygon) with `ZONING_CLASS`
+- Build a refined analysis category from both assessor type (`ACCTTYPE`) and zoning class
+- Use refined categories for final classification-driven charts/summaries
+
 > **Scope note:** Weld County publishes parcel data countywide. To make this **Greeley-specific**, filter the parcel layer with `LOCCITY = 'GREELEY'` for a fast city-name filter, or use the Weld County city-limits layer (`City_Limits_open_data`, layer 3) with `TOWNNAME = 'GREELEY'` and do a spatial clip/intersects filter for strict municipal-boundary results.
 
 ---
@@ -201,12 +216,15 @@ CITY_LIMITS_URL = "https://services.arcgis.com/ewjSqmSyHJnkfBLL/ArcGIS/rest/serv
 CITY_NAME_FIELD = "TOWNNAME"
 CITY_NAME_VALUE = "GREELEY"
 SNAPSHOT_DT     = "2026-04-08" # parcel layer data last edit date from service metadata
+ZONING_ITEM_ID  = "9074f41dfaa346bba43115abb4e2ac9a"
 
 # Optional derived fields
 # ImprovementActualValue = IMPACT
 # ImprovementAssessedValue = IMPASD
 # PricePerAcre = SALEP / GIS_Acres            (when both present and GIS_Acres > 0)
 # AssessedToActualRatio = TOTALASD / TOTALACT (when TOTALACT > 0)
+# ZONING_CLASS = stamped from city zoning polygons (centroid within)
+# ANALYSIS_CATEGORY = refined classification built from assessor + zoning
 ```
 
 ---

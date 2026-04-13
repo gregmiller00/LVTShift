@@ -89,6 +89,8 @@ cells = [
         attrs_cache = data_dir / "greeley_attrs_20260413.parquet"
         geometry_cache = data_dir / "greeley_geometry_20260413.parquet"
         osm_surface_parking_cache = data_dir / "greeley_osm_surface_parking_20260413.parquet"
+        zoning_cache = data_dir / "greeley_zoning_20260413.parquet"
+        zoning_item_id = "9074f41dfaa346bba43115abb4e2ac9a"
 
         attr_fields = [
             "OBJECTID", "PARCEL", "ACCOUNTNO", "ACCTTYPE", "ACCOUNTTYP", "NAME", "SITUS", "LOCCITY", "LEGAL",
@@ -271,6 +273,76 @@ cells = [
             osm_gdf.to_parquet(osm_surface_parking_cache, index=False)
             print(f"Saved OSM surface parking cache: {osm_surface_parking_cache.name}")
             return osm_gdf
+
+
+        def resolve_zoning_query_url(item_id):
+            candidates = [
+                f"https://www.arcgis.com/sharing/rest/content/items/{item_id}/data",
+                f"https://open-data-greeley.hub.arcgis.com/api/download/v1/items/{item_id}/data",
+            ]
+            for endpoint in candidates:
+                try:
+                    resp = requests.get(endpoint, params={"f": "json"}, timeout=90)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    for layer in payload.get("operationalLayers", []):
+                        layer_url = layer.get("url", "")
+                        if layer_url:
+                            return f"{layer_url}/query"
+                except Exception:
+                    continue
+            return None
+
+
+        def fetch_arcgis_geojson(query_url, where="1=1", chunk_size=2000):
+            session = requests.Session()
+            count_resp = session.get(
+                query_url,
+                params={"f": "json", "where": where, "returnCountOnly": "true"},
+                timeout=60,
+            )
+            count_resp.raise_for_status()
+            total_records = int(count_resp.json().get("count", 0))
+            rows = []
+            for offset in range(0, total_records, chunk_size):
+                params = {
+                    "f": "geojson",
+                    "where": where,
+                    "outFields": "*",
+                    "resultOffset": offset,
+                    "resultRecordCount": chunk_size,
+                    "outSR": 4326,
+                }
+                resp = session.get(query_url, params=params, timeout=180)
+                resp.raise_for_status()
+                gj = resp.json()
+                feats = gj.get("features", [])
+                if not feats:
+                    break
+                rows.extend(feats)
+            if not rows:
+                return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+            return gpd.GeoDataFrame.from_features(rows, crs="EPSG:4326")
+
+
+        def load_zoning_layer():
+            if zoning_cache.exists():
+                print(f"Loading zoning cache: {zoning_cache.name}")
+                return gpd.read_parquet(zoning_cache)
+
+            query_url = resolve_zoning_query_url(zoning_item_id)
+            if query_url is None:
+                print("Warning: Could not resolve zoning layer URL from ArcGIS item metadata.")
+                return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+
+            zoning_gdf = fetch_arcgis_geojson(query_url=query_url, where="1=1", chunk_size=2000)
+            if len(zoning_gdf) == 0:
+                print("Warning: Zoning query returned zero records.")
+                return zoning_gdf
+
+            zoning_gdf.to_parquet(zoning_cache, index=False)
+            print(f"Saved zoning cache: {zoning_cache.name}")
+            return zoning_gdf
         """
     ),
     md("## Step 1: Fetch and load Greeley parcels"),
@@ -304,6 +376,40 @@ cells = [
         print(gdf.shape)
         print(f"OSM surface-parking tagged parcels: {int(gdf['is_osm_surface_parking'].sum()):,}")
         display(gdf[["PARCEL", "ACCOUNTNO", "ACCTTYPE", "LOCCITY", "is_osm_surface_parking", "LANDACT", "IMPACT", "TOTALACT"]].head(5))
+        """
+    ),
+    md("## Step 1b: Download zoning layer and stamp parcels"),
+    code(
+        """
+        zoning_gdf = load_zoning_layer()
+        if len(zoning_gdf) > 0:
+            gdf_3857 = gdf.to_crs(epsg=3857)
+            zoning_3857 = zoning_gdf.to_crs(epsg=3857)
+            gdf_3857["centroid"] = gdf_3857.geometry.centroid
+            parcel_pts = gpd.GeoDataFrame(gdf_3857.drop(columns=["geometry"]), geometry="centroid", crs="EPSG:3857")
+
+            join_cols = [c for c in zoning_3857.columns if c != "geometry"]
+            stamped = gpd.sjoin(parcel_pts, zoning_3857[join_cols + ["geometry"]], how="left", predicate="within")
+
+            zoning_candidate_cols = [
+                "ZONE", "ZONING", "ZONE_NAME", "ZONECLASS", "ZONE_CLASS", "DISTRICT", "DISTRICTNAME", "NAME"
+            ]
+            chosen = next((c for c in zoning_candidate_cols if c in stamped.columns), None)
+            if chosen is None:
+                fallback_cols = [c for c in join_cols if stamped[c].dtype == "object"]
+                chosen = fallback_cols[0] if fallback_cols else None
+
+            if chosen is not None:
+                zone_by_objectid = stamped.groupby("OBJECTID")[chosen].first()
+                gdf["ZONING_CLASS"] = gdf["OBJECTID"].map(zone_by_objectid)
+            else:
+                gdf["ZONING_CLASS"] = None
+                print("Warning: no zoning class text field found; ZONING_CLASS left null.")
+        else:
+            gdf["ZONING_CLASS"] = None
+
+        print(f"Parcels stamped with zoning class: {int(gdf['ZONING_CLASS'].notna().sum()):,}")
+        display(gdf[["PARCEL", "ACCTTYPE", "ZONING_CLASS"]].head(10))
         """
     ),
     md("## Step 2: Basic quality checks and helper fields"),
@@ -342,7 +448,36 @@ cells = [
 
 
         gdf["PROPERTY_CATEGORY"] = gdf["ACCTTYPE"].apply(map_property_category)
-        display(gdf["PROPERTY_CATEGORY"].value_counts().to_frame("parcel_count"))
+        def map_refined_category(base_category: str, zoning_class: str) -> str:
+            base = str(base_category)
+            z = str(zoning_class).upper()
+            if base == "Vacant / Undeveloped":
+                return "Vacant / Undeveloped"
+            if "MIX" in z or "MU" in z:
+                return "Mixed Use"
+            if base == "Residential":
+                if z.startswith("R"):
+                    if any(tok in z for tok in ["R-H", "RH", "R3", "R-3", "R4", "R-4", "RM"]):
+                        return "Residential - Higher Density"
+                    return "Residential - Lower Density"
+                return "Residential - Other"
+            if base == "Commercial":
+                if z.startswith("C"):
+                    return "Commercial (Zoned C)"
+                return "Commercial (Other Zoning)"
+            if base == "Industrial":
+                if z.startswith("I"):
+                    return "Industrial (Zoned I)"
+                return "Industrial (Other Zoning)"
+            if "P" == z or z.startswith("PUB"):
+                return "Public / Institutional"
+            return base
+
+        gdf["ANALYSIS_CATEGORY"] = gdf.apply(
+            lambda r: map_refined_category(r["PROPERTY_CATEGORY"], r.get("ZONING_CLASS")),
+            axis=1,
+        )
+        display(gdf["ANALYSIS_CATEGORY"].value_counts().to_frame("parcel_count"))
 
         analysis_gdf = gdf[gdf["PROPERTY_CATEGORY"] != "Exempt / Government"].copy()
         print(f"Excluded exempt/government parcels: {len(gdf) - len(analysis_gdf):,}")
@@ -366,6 +501,8 @@ cells = [
             "ACCTTYPE",
             "ASSRCODE",
             "PROPERTY_CATEGORY",
+            "ANALYSIS_CATEGORY",
+            "ZONING_CLASS",
             "is_osm_surface_parking",
             "land_size_acres",
             "building_size_sqft",
@@ -500,7 +637,7 @@ cells = [
 
         output_summary = calculate_category_tax_summary(
             df=primary,
-            category_col="PROPERTY_CATEGORY",
+            category_col="ANALYSIS_CATEGORY",
             current_tax_col="current_tax",
             new_tax_col="new_tax",
         )
@@ -515,7 +652,7 @@ cells = [
         fig_height = max(5, len(plot_df) * 0.7)
         plt.figure(figsize=(12, fig_height))
         bar_colors = np.where(plot_df["median_tax_change_pct"] < 0, "#228B22", "#8B0000")
-        plt.barh(plot_df["PROPERTY_CATEGORY"], plot_df["median_tax_change_pct"], color=bar_colors)
+        plt.barh(plot_df["ANALYSIS_CATEGORY"], plot_df["median_tax_change_pct"], color=bar_colors)
         plt.axvline(0, color="black", linewidth=1)
         plt.title("Median tax change percent by property category (4:1 split)")
         plt.xlabel("Median tax change (%)")
@@ -530,7 +667,7 @@ cells = [
         summary_filtered = output_summary[output_summary["property_count"] > 50].copy()
         summary_sorted = summary_filtered.sort_values("pct_increase_gt_threshold", ascending=True)
 
-        categories_sorted = summary_sorted["PROPERTY_CATEGORY"].tolist()
+        categories_sorted = summary_sorted["ANALYSIS_CATEGORY"].tolist()
         pct_increase_sorted = summary_sorted["pct_increase_gt_threshold"].tolist()
         pct_decrease_sorted = summary_sorted["pct_decrease_gt_threshold"].tolist()
 
@@ -665,7 +802,7 @@ cells = [
                     median_tax_change=("tax_change", "median"),
                     median_tax_change_pct=("tax_change_pct", "median"),
                     parcel_count=("PARCEL", "count"),
-                    has_vacant_land=("PROPERTY_CATEGORY", lambda x: (x == "Vacant / Undeveloped").any()),
+                    has_vacant_land=("ANALYSIS_CATEGORY", lambda x: (x == "Vacant / Undeveloped").any()),
                 )
                 .reset_index()
             )
@@ -820,9 +957,9 @@ cells = [
                     plt.tight_layout()
                     plt.show()
 
-            sfr = matched[matched["PROPERTY_CATEGORY"] == "Residential"].copy()
-            mfr = matched[matched["PROPERTY_CATEGORY"].isin(["Residential"])].copy()
-            smfr = matched[matched["PROPERTY_CATEGORY"].isin(["Residential"])].copy()
+            sfr = matched[matched["ANALYSIS_CATEGORY"].str.contains("Residential - Lower Density", na=False)].copy()
+            mfr = matched[matched["ANALYSIS_CATEGORY"].str.contains("Residential - Higher Density", na=False)].copy()
+            smfr = matched[matched["ANALYSIS_CATEGORY"].str.contains("Residential", na=False)].copy()
 
             render_quintile_bars(sfr, "Residential Only")
             render_quintile_bars(mfr, "Multifamily Proxy")
