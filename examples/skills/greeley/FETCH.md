@@ -13,9 +13,11 @@ FORMAT:  f=json  (or f=geojson if you want geometry inline)
 ```text
 PORTAL ITEM: https://open-data-greeley.hub.arcgis.com/maps/9074f41dfaa346bba43115abb4e2ac9a/about
 ITEM ID:     9074f41dfaa346bba43115abb4e2ac9a
+DIRECT LAYER: https://gis.greeleygov.com/arcgis_svr/rest/services/Data_services/Zoning/MapServer/2
+QUERY URL:    https://gis.greeleygov.com/arcgis_svr/rest/services/Data_services/Zoning/MapServer/2/query
 ```
 
-Use the ArcGIS item metadata (`/sharing/rest/content/items/<item_id>/data?f=json`) to resolve the operational layer URL, then query its `/query` endpoint with `f=geojson`.
+Preferred approach is direct query against the Greeley service URL above. If blocked, fall back to ArcGIS item metadata (`/sharing/rest/content/items/<item_id>/data?f=json`) to resolve operational layer URL, then query with `f=geojson`.
 
 Recommended notebook workflow:
 - Download zoning polygons and cache to `examples/data/greeley/greeley_zoning_<date>.parquet`
