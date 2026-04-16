@@ -921,6 +921,18 @@ def filter_data_for_analysis(
 # Standard city report helpers
 # ---------------------------------------------------------------------------
 
+# Green gradient for quintile charts (Q1 lightest → Q5 darkest)
+_QUINTILE_GREENS: List[str] = ['#c8e6c9', '#81c784', '#4caf50', '#2e7d32', '#1b5e20']
+
+# Default "residential" categories used for census quintile charts
+_RESIDENTIAL_CATEGORIES: List[str] = [
+    'Single Family Residential',
+    'Small Multi-Family (2-4 units)',
+    'Large Multi-Family (5+ units)',
+    'Other Residential',
+]
+
+
 def _make_category_chart(
     cat_summary: pd.DataFrame,
     cat_col: str,
@@ -995,8 +1007,9 @@ def _make_ten_pct_chart(
     city_title: str,
     min_count: int = 50,
 ) -> plt.Figure:
-    """Stacked share chart: per-category % of parcels with >10% increase, within ±10%, >10% decrease.
+    """Diverging bar chart: % of parcels with >10% decrease (left) vs >10% increase (right).
 
+    Categories are sorted by share increasing >10%, most at top.
     Returns a Figure (does not show/save).
     """
     tmp = df[[cat_col, 'tax_change_pct']].dropna(subset=[cat_col, 'tax_change_pct']).copy()
@@ -1018,136 +1031,164 @@ def _make_ten_pct_chart(
         ax.axis('off')
         return fig
 
-    pcts = counts[['decrease_10', 'stable', 'increase_10']].div(counts['total'], axis=0) * 100
-    pcts = pcts.sort_values('decrease_10', ascending=True)
+    pcts = counts[['decrease_10', 'increase_10']].div(counts['total'], axis=0) * 100
+    # Sort by share increasing >10% descending → most increase at top
+    pcts = pcts.sort_values('increase_10', ascending=True)
 
     n = len(pcts)
-    fig, ax = plt.subplots(figsize=(12, max(4.0, n * 0.55 + 1.5)))
-    y = np.arange(n)
     labels = pcts.index.tolist()
 
-    ax.barh(y, pcts['decrease_10'], color='#228B22', edgecolor='none', height=0.65,
-            label='Decrease >10%', alpha=0.92)
-    ax.barh(y, pcts['stable'], left=pcts['decrease_10'], color='#cccccc', edgecolor='none',
-            height=0.65, label='Within ±10%', alpha=0.92)
-    ax.barh(y, pcts['increase_10'], left=pcts['decrease_10'] + pcts['stable'],
-            color='#8B0000', edgecolor='none', height=0.65, label='Increase >10%', alpha=0.92)
+    max_dec = max(pcts['decrease_10'].max(), 1.0)
+    max_inc = max(pcts['increase_10'].max(), 1.0)
+
+    # x layout: [left_margin | green_bars | 0 | red_bars | pct_label | cat_name | right_margin]
+    pct_gap = 3.5       # gap between bar end and % label (data units)
+    cat_gap = 5.0       # gap between % label and category name
+    cat_field = 30.0    # fixed width reserved for category names on the right
+
+    x_left  = -(max_dec + pct_gap + 10)
+    x_right =   max_inc + pct_gap + cat_gap + cat_field
+
+    fig_h = max(4.5, n * 0.82 + 3.2)
+    fig, ax = plt.subplots(figsize=(14, fig_h))
+    y = np.arange(n)
+
+    # Bars — green LEFT (negative x), dark-red RIGHT (positive x)
+    ax.barh(y, -pcts['decrease_10'], color='#4CAF50', edgecolor='none', height=0.58, alpha=0.92)
+    ax.barh(y,  pcts['increase_10'], color='#8B0000', edgecolor='none', height=0.58, alpha=0.92)
+
+    # Centre line
+    ax.axvline(0, color='#444444', linewidth=1.4, zorder=4)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    ax.grid(False)
+    ax.set_xlim(x_left, x_right)
+    ax.set_ylim(-0.75, n + 1.6)
+
+    # Per-row labels
+    for i, (cat, row) in enumerate(zip(labels, pcts.itertuples())):
+        dec = row.decrease_10
+        inc = row.increase_10
+        # Green % (left of green bar)
+        ax.text(-(dec + pct_gap), i, f'{dec:.0f}%', ha='right', va='center',
+                fontsize=11, color='#2e7d32', fontweight='bold')
+        # Red % (right of red bar)
+        ax.text(inc + pct_gap, i, f'{inc:.0f}%', ha='left', va='center',
+                fontsize=11, color='#8B0000', fontweight='bold')
+        # Category name at fixed right position
+        ax.text(max_inc + pct_gap + cat_gap, i, cat, ha='left', va='center',
+                fontsize=11, fontweight='bold', color='#222222')
+
+    # Column headers
+    header_y = n + 0.95
+    ax.text(-max_dec / 2, header_y, 'Percent of parcels\ndecreasing >10%',
+            ha='center', va='bottom', fontsize=11, fontweight='bold', color='#222222')
+    ax.text(max_inc / 2, header_y, 'Percent of parcels\nincreasing >10%',
+            ha='center', va='bottom', fontsize=11, fontweight='bold', color='#222222')
+
+    ax.set_title(f'Share of Parcels with >10% Tax Change — {city_title}',
+                 fontsize=14, fontweight='bold', pad=10)
+    fig.tight_layout()
+    return fig
+
+
+def _make_quintile_chart(
+    df: pd.DataFrame,
+    group_col: str,
+    group_name: str,
+    city_title: str,
+    filter_label: str,
+) -> Optional[plt.Figure]:
+    """Green-gradient quintile bar chart for a census dimension.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Parcel data (already filtered to the desired subset).
+    group_col : str
+        Column to quintile on (e.g. ``'median_income'`` or ``'minority_pct'``).
+    group_name : str
+        Human-readable dimension name for the title (e.g. ``'Neighborhood Income'``).
+    city_title : str
+        City name for the chart title.
+    filter_label : str
+        Description of the parcel filter applied, shown in the title
+        (e.g. ``'Excl. Vacant Land, Residential Only'``).
+
+    Returns
+    -------
+    plt.Figure or None
+    """
+    valid = df[df[group_col].notna()].copy()
+    if group_col == 'median_income':
+        valid = valid[valid[group_col] > 0]
+    if len(valid) < 50 or 'tax_change_pct' not in valid.columns:
+        return None
+
+    try:
+        valid['_q'] = pd.qcut(valid[group_col], 5, labels=False, duplicates='drop')
+    except ValueError:
+        return None
+    if valid['_q'].nunique() < 2:
+        return None
+
+    q_x_labels = ['Q1 (Lowest)', 'Q2', 'Q3', 'Q4', 'Q5 (Highest)']
+    q_stats = (
+        valid.groupby('_q', observed=False)
+        .agg(median_pct=('tax_change_pct', 'median'),
+             count=('tax_change_pct', 'count'))
+        .reset_index()
+        .sort_values('_q')
+    )
+    n = len(q_stats)
+    if n == 0:
+        return None
+
+    vals   = q_stats['median_pct'].tolist()
+    q_idxs = q_stats['_q'].astype(int).tolist()
+    colors = [_QUINTILE_GREENS[min(qi, 4)] for qi in q_idxs]
+
+    min_val = min(vals + [0])
+    max_val = max(vals + [0])
+    y_range = max(max_val - min_val, 0.5)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(n)
+    bars = ax.bar(x, vals, color=colors, edgecolor='none', width=0.72)
+    ax.axhline(0, color='black', linewidth=1.5, zorder=3)
 
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.grid(False)
-    ax.tick_params(left=False, bottom=False, labelbottom=False)
-    ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=11)
+    ax.set_xticks([])
+    ax.tick_params(left=False, labelleft=False)
 
-    for i, (_, row) in enumerate(pcts.iterrows()):
-        if row['decrease_10'] >= 8:
-            ax.text(row['decrease_10'] / 2, i, f"{row['decrease_10']:.0f}%",
-                    ha='center', va='center', fontsize=9, color='white', fontweight='bold')
-        if row['stable'] >= 8:
-            ax.text(row['decrease_10'] + row['stable'] / 2, i, f"{row['stable']:.0f}%",
-                    ha='center', va='center', fontsize=9, color='#333333', fontweight='bold')
-        if row['increase_10'] >= 8:
-            ax.text(row['decrease_10'] + row['stable'] + row['increase_10'] / 2, i,
-                    f"{row['increase_10']:.0f}%",
-                    ha='center', va='center', fontsize=9, color='white', fontweight='bold')
+    # Quintile labels sit at y=0: above it when bars go down, below when bars go up
+    lbl_offset = y_range * 0.04
+    for i, (lbl, val) in enumerate(zip(q_x_labels, vals)):
+        if val <= 0:
+            ax.text(i,  lbl_offset, lbl, ha='center', va='bottom',
+                    fontsize=12, fontweight='bold', color='#1a1a1a')
+        else:
+            ax.text(i, -lbl_offset, lbl, ha='center', va='top',
+                    fontsize=12, fontweight='bold', color='#1a1a1a')
 
-    ax.legend(loc='lower right', fontsize=10, framealpha=0.0)
-    ax.set_title(f'Share of Parcels with >10% Tax Change — {city_title}',
-                 fontsize=14, fontweight='bold')
-    ax.set_xlim(0, 100)
-    ax.set_ylim(-0.6, n - 0.4)
-    fig.tight_layout()
-    return fig
+    # Values inside bars (skip if bar is too short to label)
+    for i, (bar, val) in enumerate(zip(bars, vals)):
+        if abs(val) >= y_range * 0.12:
+            ax.text(bar.get_x() + bar.get_width() / 2, val / 2,
+                    f'{val:.1f}%',
+                    ha='center', va='center', fontsize=12, fontweight='bold', color='black')
 
-
-def _make_income_quintile_chart(df: pd.DataFrame, city_title: str) -> Optional[plt.Figure]:
-    """Build the income-quintile bar chart and return it (does not show/save)."""
-    valid = df[(df['median_income'].notna()) & (df['median_income'] > 0)].copy()
-    if len(valid) < 50:
-        return None
-
-    valid['_quintile'] = pd.qcut(
-        valid['median_income'], 5,
-        labels=['Q1\n(Lowest)', 'Q2', 'Q3', 'Q4', 'Q5\n(Highest)'],
+    margin = y_range * 0.22
+    ax.set_ylim(min_val - margin, max_val + margin)
+    ax.set_xlim(-0.6, n - 0.4)
+    ax.set_title(
+        f'Median Tax Change by {group_name} Quintile\n({filter_label})',
+        fontsize=13, fontweight='bold', pad=12,
     )
-    q_stats = (
-        valid.groupby('_quintile', observed=False)
-        .agg(median_pct=('tax_change_pct', 'median'),
-             mean_income=('median_income', 'mean'),
-             count=('tax_change_pct', 'count'))
-        .reset_index()
-    )
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    colors = ['#228B22' if v <= 0 else '#8B0000' for v in q_stats['median_pct']]
-    bars = ax.bar(
-        q_stats['_quintile'].astype(str), q_stats['median_pct'],
-        color=colors, alpha=0.85, edgecolor='none',
-    )
-    ax.axhline(0, color='black', linewidth=1)
-    for spine in ('top', 'right'):
-        ax.spines[spine].set_visible(False)
-    ax.grid(False)
-
-    for bar, val in zip(bars, q_stats['median_pct']):
-        y_pos = val + 0.3 if val >= 0 else val - 0.3
-        va = 'bottom' if val >= 0 else 'top'
-        ax.text(bar.get_x() + bar.get_width() / 2, y_pos, f'{val:+.1f}%',
-                ha='center', va=va, fontsize=12, fontweight='bold')
-
-    ax.set_xlabel('Neighborhood Income Quintile', fontsize=12)
-    ax.set_ylabel('Median Tax Change (%)', fontsize=12)
-    ax.set_title(f'Tax Change by Neighborhood Income — {city_title}',
-                 fontsize=14, fontweight='bold')
-    fig.tight_layout()
-    return fig
-
-
-def _make_minority_quintile_chart(df: pd.DataFrame, city_title: str) -> Optional[plt.Figure]:
-    """Build the minority-share quintile bar chart and return it (does not show/save)."""
-    if 'minority_pct' not in df.columns:
-        return None
-    valid = df[df['minority_pct'].notna()].copy()
-    if len(valid) < 50:
-        return None
-
-    valid['_quintile'] = pd.qcut(
-        valid['minority_pct'], 5,
-        labels=['Q1\n(Least)', 'Q2', 'Q3', 'Q4', 'Q5\n(Most)'],
-        duplicates='drop',
-    )
-    q_stats = (
-        valid.groupby('_quintile', observed=False)
-        .agg(median_pct=('tax_change_pct', 'median'),
-             mean_minority=('minority_pct', 'mean'),
-             count=('tax_change_pct', 'count'))
-        .reset_index()
-    )
-    if q_stats.empty or q_stats['count'].sum() == 0:
-        return None
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    colors = ['#228B22' if v <= 0 else '#8B0000' for v in q_stats['median_pct']]
-    bars = ax.bar(
-        q_stats['_quintile'].astype(str), q_stats['median_pct'],
-        color=colors, alpha=0.85, edgecolor='none',
-    )
-    ax.axhline(0, color='black', linewidth=1)
-    for spine in ('top', 'right'):
-        ax.spines[spine].set_visible(False)
-    ax.grid(False)
-
-    for bar, val in zip(bars, q_stats['median_pct']):
-        y_pos = val + 0.3 if val >= 0 else val - 0.3
-        va = 'bottom' if val >= 0 else 'top'
-        ax.text(bar.get_x() + bar.get_width() / 2, y_pos, f'{val:+.1f}%',
-                ha='center', va=va, fontsize=12, fontweight='bold')
-
-    ax.set_xlabel('Neighborhood Minority Share Quintile', fontsize=12)
-    ax.set_ylabel('Median Tax Change (%)', fontsize=12)
-    ax.set_title(f'Tax Change by Neighborhood Minority Share — {city_title}',
-                 fontsize=14, fontweight='bold')
     fig.tight_layout()
     return fig
 
@@ -1180,21 +1221,21 @@ def create_city_report(
     output_dir: str = '../../analysis/reports',
     show: bool = True,
     min_category_count: int = 50,
+    census_categories: Optional[List[str]] = None,
 ) -> dict:
     """
     Generate standard analysis charts from a city's standard export DataFrame.
 
     Saves PNGs to ``{output_dir}/{city}/``:
 
-    - ``category_impact.png``   — median % change by property category (categories with
-      fewer than *min_category_count* parcels are hidden).
-    - ``ten_pct_share.png``     — stacked share of parcels per category with >10% increase /
-      within ±10% / >10% decrease.
-    - ``income_quintile.png``   — median % change by neighborhood income quintile
-      (emitted when ``median_income`` column is present with any valid data).
-    - ``minority_quintile.png`` — median % change by neighborhood minority-share quintile
-      (emitted when ``minority_pct`` column is present with any valid data).
-    - ``distribution.png``      — histogram of parcel-level tax change %.
+    - ``category_impact.png``                — median % change by property category.
+    - ``ten_pct_share.png``                  — diverging bar: % parcels with >10% change.
+    - ``income_quintile_non_vacant.png``     — income quintile, all non-vacant parcels.
+    - ``income_quintile_residential.png``    — income quintile, residential parcels only
+      (or ``census_categories`` if supplied).
+    - ``minority_quintile_non_vacant.png``   — minority quintile, all non-vacant.
+    - ``minority_quintile_residential.png``  — minority quintile, residential only.
+    - ``distribution.png``                   — histogram of parcel-level tax change %.
 
     Parameters
     ----------
@@ -1212,6 +1253,10 @@ def create_city_report(
         Display figures inline when ``True`` (Jupyter).  Use ``False`` for headless runs.
     min_category_count : int
         Minimum parcel count for a category to appear in category charts.  Default ``50``.
+    census_categories : list of str or None
+        Property categories to include in the "residential" census quintile charts.
+        Defaults to :data:`_RESIDENTIAL_CATEGORIES` when ``None``.  Pass an empty list
+        ``[]`` to skip the residential-filtered version entirely.
 
     Returns
     -------
@@ -1228,8 +1273,11 @@ def create_city_report(
     city_title = city.replace('_', ' ').title()
 
     cat_col = 'property_category' if 'property_category' in df.columns else 'PROPERTY_CATEGORY'
+    res_cats = census_categories if census_categories is not None else _RESIDENTIAL_CATEGORIES
 
+    # ------------------------------------------------------------------
     # Chart 1: property category impact (median %)
+    # ------------------------------------------------------------------
     cat_summary = calculate_category_tax_summary(
         df, category_col=cat_col, current_tax_col='current_tax', new_tax_col='new_tax',
     )
@@ -1244,7 +1292,9 @@ def create_city_report(
         else:
             plt.close(fig)
 
-    # Chart 2: ±10 % share by category
+    # ------------------------------------------------------------------
+    # Chart 2: diverging ±10 % share by category
+    # ------------------------------------------------------------------
     if cat_col in df.columns and 'tax_change_pct' in df.columns:
         fig = _make_ten_pct_chart(df, cat_col, city_title, min_count=min_category_count)
         path = os.path.join(city_dir, 'ten_pct_share.png')
@@ -1255,31 +1305,66 @@ def create_city_report(
         else:
             plt.close(fig)
 
-    # Chart 3: income quintile (requires any valid median_income data)
-    if 'median_income' in df.columns and df['median_income'].notna().any():
-        fig = _make_income_quintile_chart(df, city_title)
-        if fig is not None:
-            path = os.path.join(city_dir, 'income_quintile.png')
-            fig.savefig(path, dpi=150, bbox_inches='tight')
-            charts_saved.append(path)
-            if show:
-                plt.show()
-            else:
-                plt.close(fig)
+    # ------------------------------------------------------------------
+    # Census quintile charts — two filters each
+    # ------------------------------------------------------------------
+    def _save_fig(fig: Optional[plt.Figure], fname: str) -> None:
+        if fig is None:
+            return
+        p = os.path.join(city_dir, fname)
+        fig.savefig(p, dpi=150, bbox_inches='tight')
+        charts_saved.append(p)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
 
-    # Chart 4: minority share quintile (requires any valid minority_pct data)
-    if 'minority_pct' in df.columns and df['minority_pct'].notna().any():
-        fig = _make_minority_quintile_chart(df, city_title)
-        if fig is not None:
-            path = os.path.join(city_dir, 'minority_quintile.png')
-            fig.savefig(path, dpi=150, bbox_inches='tight')
-            charts_saved.append(path)
-            if show:
-                plt.show()
-            else:
-                plt.close(fig)
+    has_income   = 'median_income' in df.columns and df['median_income'].notna().any()
+    has_minority = 'minority_pct'  in df.columns and df['minority_pct'].notna().any()
 
-    # Chart 5: distribution histogram
+    if has_income or has_minority:
+        # Filter 1: all non-vacant
+        if cat_col in df.columns:
+            df_nv = df[df[cat_col] != 'Vacant Land'].copy()
+        else:
+            df_nv = df.copy()
+
+        if has_income:
+            _save_fig(
+                _make_quintile_chart(df_nv, 'median_income', 'Neighborhood Income',
+                                     city_title, 'Excl. Vacant Land, All Properties'),
+                'income_quintile_non_vacant.png',
+            )
+        if has_minority:
+            _save_fig(
+                _make_quintile_chart(df_nv, 'minority_pct', 'Minority Percentage',
+                                     city_title, 'Excl. Vacant Land, All Properties'),
+                'minority_quintile_non_vacant.png',
+            )
+
+        # Filter 2: residential (or custom) only
+        if res_cats and cat_col in df.columns:
+            df_res = df[df[cat_col].isin(res_cats)].copy()
+            res_label = (
+                'Residential Only' if res_cats == _RESIDENTIAL_CATEGORIES
+                else 'Custom Category Filter'
+            )
+            if has_income:
+                _save_fig(
+                    _make_quintile_chart(df_res, 'median_income', 'Neighborhood Income',
+                                         city_title, f'Excl. Vacant Land, {res_label}'),
+                    'income_quintile_residential.png',
+                )
+            if has_minority:
+                _save_fig(
+                    _make_quintile_chart(df_res, 'minority_pct', 'Minority Percentage',
+                                         city_title, f'Excl. Vacant Land, {res_label}'),
+                    'minority_quintile_residential.png',
+                )
+
+    # ------------------------------------------------------------------
+    # Chart: distribution histogram
+    # ------------------------------------------------------------------
     if 'tax_change_pct' in df.columns:
         fig = _make_distribution_chart(df, city_title)
         path = os.path.join(city_dir, 'distribution.png')
@@ -1291,10 +1376,13 @@ def create_city_report(
             plt.close(fig)
 
     current_rev = float(df['current_tax'].sum())
-    new_rev = float(df['new_tax'].sum())
-    land_mill = float(df['land_millage'].iloc[0]) if 'land_millage' in df.columns and len(df) else None
-    imp_mill = float(df['improvement_millage'].iloc[0]) if 'improvement_millage' in df.columns and len(df) else None
-    model_t = str(df['model_type'].iloc[0]) if 'model_type' in df.columns and len(df) else None
+    new_rev     = float(df['new_tax'].sum())
+    land_mill = (float(df['land_millage'].iloc[0])
+                 if 'land_millage' in df.columns and len(df) else None)
+    imp_mill  = (float(df['improvement_millage'].iloc[0])
+                 if 'improvement_millage' in df.columns and len(df) else None)
+    model_t   = (str(df['model_type'].iloc[0])
+                 if 'model_type' in df.columns and len(df) else None)
 
     return {
         'row_count': len(df),
