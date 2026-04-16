@@ -1349,10 +1349,7 @@ def create_city_report(
         # Filter 2: residential (or custom) only
         if res_cats and cat_col in df.columns:
             df_res = df[df[cat_col].isin(res_cats)].copy()
-            res_label = (
-                'Residential Only' if res_cats == _RESIDENTIAL_CATEGORIES
-                else 'Custom Category Filter'
-            )
+            res_label = 'Residential Only'
             if has_income:
                 _save_fig(
                     _make_quintile_chart(df_res, 'median_income', 'Neighborhood Income',
