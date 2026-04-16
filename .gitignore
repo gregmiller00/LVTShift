@@ -112,9 +112,11 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Data directories - where examples download large datasets
-examples/data/
+# Data directories — city parcel downloads and analysis outputs
 data/
+cities/*/data/
+analysis/data/
+analysis/reports/
 
 # Common data file extensions
 *.csv
@@ -128,6 +130,7 @@ data/
 *.dbf
 *.prj
 *.cpg
+*.png
 
 # Temporary files
 *.tmp
@@ -156,4 +159,7 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup 
-examples/denver.zip
+# Temporary notebook execution artifacts
+*_with_override.ipynb
+*_with_capture.ipynb
+*_executed.ipynb

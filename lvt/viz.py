@@ -915,3 +915,256 @@ def filter_data_for_analysis(
         filtered_non_vacant = filtered_all.copy()
     
     return filtered_all, filtered_non_vacant
+
+
+# ---------------------------------------------------------------------------
+# Standard city report
+# ---------------------------------------------------------------------------
+
+def _make_category_chart(
+    cat_summary: pd.DataFrame,
+    cat_col: str,
+    city_title: str,
+    right_col_pad: float = 120.0,
+) -> plt.Figure:
+    """Build the property-category impact figure and return it (does not show/save)."""
+    plot_df = cat_summary[cat_summary['property_count'] >= 10].copy()
+    plot_df = plot_df.sort_values('median_tax_change_pct').reset_index(drop=True)
+    if 'total_tax_change_dollars' not in plot_df.columns:
+        plot_df['total_tax_change_dollars'] = (
+            plot_df['median_tax_change'] * plot_df['property_count']
+        )
+
+    n = len(plot_df)
+    if n == 0:
+        fig, ax = plt.subplots(figsize=(10, 3))
+        ax.text(0.5, 0.5, 'No category data', ha='center', va='center', transform=ax.transAxes)
+        ax.axis('off')
+        return fig
+
+    fig, ax = plt.subplots(figsize=(17, max(4.0, n * 0.8 + 1.2)))
+
+    cats = plot_df[cat_col].tolist()
+    pcts = plot_df['median_tax_change_pct'].tolist()
+    dollars = plot_df['median_tax_change'].tolist()
+    counts = plot_df['property_count'].tolist()
+    totals = plot_df['total_tax_change_dollars'].tolist()
+
+    colors = ['#8B0000' if v > 0 else '#228B22' for v in pcts]
+    y = np.arange(n)
+    ax.barh(y, pcts, color=colors, edgecolor='none', height=0.75, alpha=0.92, zorder=2)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    ax.axvline(0, color='black', linewidth=1, linestyle='dotted', zorder=1)
+
+    max_abs = max(abs(min(pcts)), abs(max(pcts))) if pcts else 1.0
+    right_x = max_abs + right_col_pad
+
+    ax.text(right_x, n - 0.25, 'Net Change', ha='center', va='bottom',
+            fontsize=15, fontweight='bold')
+
+    for i, (cat, pct, dol, cnt, tot) in enumerate(
+        zip(cats, pcts, dollars, counts, totals)
+    ):
+        tx = pct + 1.2 if pct >= 0 else pct - 1.2
+        ha = 'left' if pct >= 0 else 'right'
+        dol_s = f'${dol:,.0f}' if dol >= 0 else f'-${abs(dol):,.0f}'
+        tot_s = f'${tot:,.0f}' if tot >= 0 else f'-${abs(tot):,.0f}'
+        ax.text(tx, i + 0.18, cat, ha=ha, va='center', fontsize=14, fontweight='bold')
+        ax.text(tx, i - 0.03, f'Median: {dol_s}, {pct:+.1f}%', ha=ha, va='center',
+                fontsize=12, fontweight='bold')
+        ax.text(tx, i - 0.23, f'{cnt:,} parcels', ha=ha, va='center',
+                fontsize=11, color='#888888')
+        ax.text(right_x, i, tot_s, ha='center', va='center', fontsize=12, fontweight='bold')
+
+    ax.set_title(f'Property Category Tax Impact — {city_title}',
+                 fontsize=18, fontweight='bold', pad=18)
+    ax.set_xlim(-right_x, right_x + 60)
+    ax.set_ylim(-0.8, n - 0.05)
+    fig.tight_layout()
+    return fig
+
+
+def _make_income_quintile_chart(df: pd.DataFrame, city_title: str) -> Optional[plt.Figure]:
+    """Build the income-quintile bar chart and return it (does not show/save)."""
+    valid = df[(df['median_income'].notna()) & (df['median_income'] > 0)].copy()
+    if len(valid) < 50:
+        return None
+
+    valid['_quintile'] = pd.qcut(
+        valid['median_income'], 5,
+        labels=['Q1\n(Lowest)', 'Q2', 'Q3', 'Q4', 'Q5\n(Highest)'],
+    )
+    q_stats = (
+        valid.groupby('_quintile', observed=False)
+        .agg(median_pct=('tax_change_pct', 'median'),
+             mean_income=('median_income', 'mean'),
+             count=('tax_change_pct', 'count'))
+        .reset_index()
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    colors = ['#228B22' if v <= 0 else '#8B0000' for v in q_stats['median_pct']]
+    bars = ax.bar(
+        q_stats['_quintile'].astype(str), q_stats['median_pct'],
+        color=colors, alpha=0.85, edgecolor='none',
+    )
+    ax.axhline(0, color='black', linewidth=1)
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+
+    for bar, val in zip(bars, q_stats['median_pct']):
+        y_pos = val + 0.3 if val >= 0 else val - 0.3
+        va = 'bottom' if val >= 0 else 'top'
+        ax.text(bar.get_x() + bar.get_width() / 2, y_pos, f'{val:+.1f}%',
+                ha='center', va=va, fontsize=12, fontweight='bold')
+
+    ax.set_xlabel('Neighborhood Income Quintile', fontsize=12)
+    ax.set_ylabel('Median Tax Change (%)', fontsize=12)
+    ax.set_title(f'Tax Change by Neighborhood Income — {city_title}',
+                 fontsize=14, fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def _make_distribution_chart(df: pd.DataFrame, city_title: str) -> plt.Figure:
+    """Build the tax-change-% distribution histogram and return it (does not show/save)."""
+    pcts = df['tax_change_pct'].dropna()
+    pcts = pcts[(pcts > -200) & (pcts < 500)]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(pcts, bins=80, color='steelblue', alpha=0.75, edgecolor='none')
+    ax.axvline(0, color='black', linewidth=1.5)
+    ax.axvline(pcts.median(), color='crimson', linewidth=1.5, linestyle='--',
+               label=f'Median {pcts.median():+.1f}%')
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.set_xlabel('Tax Change (%)', fontsize=12)
+    ax.set_ylabel('Number of Parcels', fontsize=12)
+    ax.set_title(f'Distribution of Parcel Tax Changes — {city_title}',
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def create_city_report(
+    df: pd.DataFrame,
+    city: str,
+    output_dir: str = '../../analysis/reports',
+    show: bool = True,
+) -> dict:
+    """
+    Generate standard analysis charts from a city's standard export CSV.
+
+    Produces PNGs saved to {output_dir}/{city}/:
+
+    - ``category_impact.png`` — horizontal bar chart of median % change by
+      property category, with aggregate net change column.
+    - ``income_quintile.png`` — median % change by neighborhood income quintile
+      (only emitted when census ``median_income`` data covers >30 % of rows).
+    - ``distribution.png``    — histogram of parcel-level tax change %.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Standard export CSV loaded as a DataFrame (output of
+        ``save_standard_export``).  Required columns: ``property_category``
+        (or ``PROPERTY_CATEGORY``), ``current_tax``, ``new_tax``,
+        ``tax_change``, ``tax_change_pct``.  Optional census columns:
+        ``median_income``, ``minority_pct``, ``black_pct``.
+    city : str
+        City slug used for output file names, e.g. ``"baltimore"``.  The
+        display name shown in chart titles is derived by replacing underscores
+        and title-casing.
+    output_dir : str
+        Parent directory for saving PNGs.  A ``{city}`` sub-directory is
+        created automatically.  Default ``"../../analysis/reports"`` resolves
+        correctly from ``cities/<city>/`` notebooks.
+    show : bool
+        Display figures inline when ``True`` (suitable for Jupyter notebooks).
+        Set ``False`` for headless / batch execution to avoid opening windows.
+
+    Returns
+    -------
+    dict
+        Summary statistics::
+
+            {
+              'row_count': int,
+              'current_revenue': float,
+              'new_revenue': float,
+              'revenue_delta_pct': float,
+              'land_millage': float | None,
+              'improvement_millage': float | None,
+              'model_type': str | None,
+              'charts_saved': list[str],   # absolute paths to saved PNGs
+            }
+    """
+    import os
+    # Lazy import avoids circular dependency at module-load time
+    from lvt.lvt_utils import calculate_category_tax_summary
+
+    city_dir = os.path.join(output_dir, city)
+    os.makedirs(city_dir, exist_ok=True)
+    charts_saved: List[str] = []
+    city_title = city.replace('_', ' ').title()
+
+    # save_standard_export outputs lowercase 'property_category'
+    cat_col = 'property_category' if 'property_category' in df.columns else 'PROPERTY_CATEGORY'
+
+    # Chart 1: property category impact
+    cat_summary = calculate_category_tax_summary(
+        df, category_col=cat_col, current_tax_col='current_tax', new_tax_col='new_tax',
+    )
+    if not cat_summary.empty:
+        fig = _make_category_chart(cat_summary, cat_col, city_title)
+        path = os.path.join(city_dir, 'category_impact.png')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
+        charts_saved.append(path)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    # Chart 2: income quintile (requires census data on ≥30 % of rows)
+    if 'median_income' in df.columns and df['median_income'].notna().mean() > 0.3:
+        fig = _make_income_quintile_chart(df, city_title)
+        if fig is not None:
+            path = os.path.join(city_dir, 'income_quintile.png')
+            fig.savefig(path, dpi=150, bbox_inches='tight')
+            charts_saved.append(path)
+            if show:
+                plt.show()
+            else:
+                plt.close(fig)
+
+    # Chart 3: distribution histogram
+    if 'tax_change_pct' in df.columns:
+        fig = _make_distribution_chart(df, city_title)
+        path = os.path.join(city_dir, 'distribution.png')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
+        charts_saved.append(path)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    current_rev = float(df['current_tax'].sum())
+    new_rev = float(df['new_tax'].sum())
+    land_mill = float(df['land_millage'].iloc[0]) if 'land_millage' in df.columns and len(df) else None
+    imp_mill = float(df['improvement_millage'].iloc[0]) if 'improvement_millage' in df.columns and len(df) else None
+    model_t = str(df['model_type'].iloc[0]) if 'model_type' in df.columns and len(df) else None
+
+    return {
+        'row_count': len(df),
+        'current_revenue': current_rev,
+        'new_revenue': new_rev,
+        'revenue_delta_pct': (new_rev - current_rev) / max(abs(current_rev), 1) * 100,
+        'land_millage': land_mill,
+        'improvement_millage': imp_mill,
+        'model_type': model_t,
+        'charts_saved': charts_saved,
+    }
