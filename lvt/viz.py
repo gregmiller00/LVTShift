@@ -1146,9 +1146,13 @@ def _make_quintile_chart(
     if n == 0:
         return None
 
-    vals   = q_stats['median_pct'].tolist()
-    q_idxs = q_stats['_q'].astype(int).tolist()
-    colors = [_QUINTILE_GREENS[min(qi, 4)] for qi in q_idxs]
+    vals = q_stats['median_pct'].tolist()
+    # Assign darkest color to the most-negative quintile (biggest tax decrease),
+    # lightest to the least-negative.  Matches archived chart convention:
+    #   color_rank = argsort(argsort(-vals))  →  most negative → rank 4 → darkest
+    vals_arr = np.array(vals)
+    color_ranks = np.argsort(np.argsort(-vals_arr))  # 0=most positive, 4=most negative
+    colors = [_QUINTILE_GREENS[min(int(r), 4)] for r in color_ranks]
 
     min_val = min(vals + [0])
     max_val = max(vals + [0])
