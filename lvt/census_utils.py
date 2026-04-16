@@ -85,6 +85,11 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
     # Create standardized GEOID
     df['std_geoid'] = df['state_fips'] + df['county_fips'] + df['tract_fips'] + df['bg_fips']
 
+    # Census API returns all values as strings — coerce to numeric
+    for col in ['median_income', 'total_pop', 'white_pop', 'black_pop', 'hispanic_pop']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # Calculate minority and black percentages
     df['minority_pct'] = ((df['total_pop'] - df['white_pop']) / df['total_pop'] * 100).round(2)
     df['black_pct'] = (df['black_pop'] / df['total_pop'] * 100).round(2)
