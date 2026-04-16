@@ -169,7 +169,7 @@ Each notebook auto-detects locally cached data and skips re-scraping if a recent
 
 ### Adding a new city
 
-See `LVT_MODELING_GUIDE.md` for a step-by-step questionnaire covering data sources, column mapping, exemption handling, millage derivation, and standard export wiring.
+See `docs/LVT_MODELING_GUIDE.md` for a step-by-step questionnaire covering data sources, column mapping, exemption handling, millage derivation, and standard export wiring.
 
 ---
 
