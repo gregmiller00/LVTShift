@@ -19,14 +19,21 @@ cp env.template .env
 
 ## Architecture
 
-Five core modules, used from Jupyter notebooks in `examples/`:
+Five core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
 
 ```
-cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
-census_utils.py    → Fetch Census demographics, spatial join to parcels
-lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions)
-policy_analysis.py → Identify vacant land, parking lots, development barriers
-viz.py             → Scatter plots, quintile analysis, demographic charts
+lvt/cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
+lvt/census_utils.py    → Fetch Census demographics, spatial join to parcels
+lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions)
+lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
+lvt/viz.py             → Scatter plots, quintile analysis, demographic charts
+```
+
+Notebooks import via the package:
+```python
+import sys; sys.path.insert(0, '../..')  # from cities/<city>/
+from lvt.lvt_utils import model_split_rate_tax
+from lvt.cloud_utils import get_feature_data_with_geometry
 ```
 
 **Data flow**: Fetch parcels (cloud_utils) → calculate current tax → collapse condos by PlatID with imputed land values → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → analyze equity impacts (viz/policy_analysis)
@@ -70,9 +77,9 @@ Two modeling approaches used in St. Paul:
 - `match_to_census_blockgroups(gdf, census_gdf)` → spatial join parcels to block groups
 - Auto-detects large counties (Cook, LA, Harris) for chunked fetching
 
-## Example Notebooks
+## Notebooks
 
-Located in `examples/`. Each follows a pattern:
+Located in `cities/<city>/model.ipynb`. Each follows a pattern:
 1. Fetch/load parcel data from county GIS
 2. Validate against official tax base data
 3. Classify parcels (TIF, exempt, city-taxable)
@@ -80,12 +87,14 @@ Located in `examples/`. Each follows a pattern:
 5. Run split-rate model(s)
 6. Visualize by category (bar charts, butterfly charts, scatter plots)
 7. Merge Census data for equity analysis (income/minority quintiles)
+8. `save_standard_export()` → `create_city_report()`
 
-Active notebooks:
-- `st_paul_v2.ipynb` — City tax portion only (~36%), Tax Capacity approach at 4:1 ratio
-- `st_paul_full_bill.ipynb` — HF 1342 full tax bill, same TC split-rate at 4:1, includes TIF analysis
+Data stored locally in `cities/<city>/data/` as geoparquet files (gitignored).
 
-Both notebooks collapse condo units into buildings (Step 3b) before modeling. Data stored in `examples/data/st_paul/` as geoparquet files.
+## Documentation
+
+- `docs/LVT_MODELING_GUIDE.md` — step-by-step guide for adding a new city
+- `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor)
 
 ## Code Style
 

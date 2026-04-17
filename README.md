@@ -1,230 +1,214 @@
 # LVTShift
 
-**LVTShift** is a comprehensive toolkit for analyzing and modeling Land Value Tax (LVT) policy shifts in U.S. counties and cities. Created by the Center for Land Economics ([landeconomics.org](https://landeconomics.org)), this package helps researchers, policymakers, and advocates understand how shifting from traditional property taxes to land value taxes would affect different neighborhoods, property types, and demographic groups.
+**LVTShift** is a research toolkit for modeling Land Value Tax (LVT) policy shifts in U.S. cities. Built by the [Center for Land Economics](https://landeconomics.org), it quantifies how shifting from a traditional property tax to a land value tax affects neighborhoods, property types, and demographic groups — and produces publication-ready charts from any city's data.
+
+---
 
 ## What is a Land Value Tax?
 
-A **Land Value Tax** taxes only the value of land, not the buildings or improvements on that land. Unlike traditional property taxes that discourage development by taxing both land and buildings, LVT:
+A Land Value Tax taxes only the value of land, not the buildings on it. This changes the incentive structure of property ownership:
 
-- **Encourages development** - No penalty for improving your property
-- **Reduces speculation** - Makes it expensive to hold vacant land
-- **Promotes affordable housing** - Removes the tax burden on new construction
-- **Generates stable revenue** - Land values are more stable than building values
+- **Vacant and underutilized land** becomes more expensive to hold → encourages development
+- **Dense housing and improvements** are untaxed or lightly taxed → rewards efficient land use
+- **Revenue stays the same** → pure shift in *who* pays, not *how much* government collects
+- **Land supply is fixed** → unlike building taxes, LVT cannot be passed through to tenants via reduced supply
 
-## What This Package Does
+---
 
-### 🏠 **Property Tax Modeling**
-Transform your city's property tax data to model different LVT scenarios:
-- **Split-rate taxes** (tax land at 3x, 4x, or any multiple of building rates)
-- **Full building abatements** (eliminate taxes on improvements entirely)
-- **Graduated exemptions** (phase in LVT with exemptions for smaller properties)
-- **Revenue-neutral analysis** (maintain the same total tax revenue)
+## Architecture
 
-### 📊 **Data Collection & Processing**
-Automatically fetch and process the data you need:
-- **Property records** from county GIS systems and open data portals
-- **Tax assessment data** including land values, building values, and exemptions
-- **Census demographics** (income, race, population) for equity analysis
-- **Geographic boundaries** for mapping and spatial analysis
+```
+lvt/
+  lvt_utils.py       Core tax modeling (split-rate, building abatement, exemptions)
+  viz.py             Standard charts and city report generation
 
-### 📈 **Policy Impact Analysis**
-Understand what problems LVT could help solve in your city:
-- **Vacant land speculation** - Find concentrated vacant land holdings
-- **Underutilized parking lots** - Identify prime development sites sitting empty
-- **Development barriers** - Calculate how building taxes discourage construction
-- **Housing supply impact** - Estimate how many new housing units LVT could enable
+cloud_utils.py       Fetch parcel data from county ArcGIS FeatureServers
+census_utils.py      Fetch ACS demographics and spatial-join to parcels
+policy_analysis.py   Vacant land, parking lot, and development barrier analysis
 
-### 🏘️ **Demographic & Equity Analysis**
-Ensure your LVT policy is fair and equitable:
-- **Income impact analysis** - How does LVT affect different income levels?
-- **Racial equity assessment** - Are there disparate impacts by race/ethnicity?
-- **Neighborhood analysis** - Which areas benefit vs. bear increased burden?
-- **Property type breakdown** - How are different housing types affected?
+cities/              One notebook per city
+  st_paul/
+  spokane/
+  southbend/
+  baltimore/
+  pittsburgh/
+  rochester/
+  ... (13 cities total)
 
-## Real-World Example: South Bend, Indiana
+analysis/
+  data/              Standard exported CSVs (one per city)
+  reports/           PNG charts (one folder per city)
+```
 
-Our main example analyzes a **4:1 split-rate tax** for South Bend, where land would be taxed at 4 times the rate of buildings. The analysis shows:
+**Data flow:**
 
-- **Single-family homes**: Most see modest tax decreases or increases
-- **Vacant land**: Significant tax increases, encouraging development
-- **Dense development**: Buildings with high improvement-to-land ratios benefit most
-- **Revenue neutral**: Total city tax revenue stays the same
+```
+Fetch parcels (cloud_utils)
+  → Classify property types → Calculate current tax
+  → Model LVT scenario (lvt_utils) → Merge Census demographics (census_utils)
+  → save_standard_export() → create_city_report()
+```
+
+---
+
+## Modeling Approaches
+
+Two primary LVT scenarios are implemented, both revenue-neutral:
+
+### Split-Rate Tax
+Tax land and improvements at different millage rates. A 4:1 ratio means land is taxed at four times the rate of buildings.
+
+```python
+from lvt.lvt_utils import model_split_rate_tax
+
+land_mill, imp_mill, revenue, df = model_split_rate_tax(
+    df=parcels,
+    land_value_col='EMVLand1',
+    improvement_value_col='EMVBuilding1',
+    current_revenue=current_revenue,
+    land_improvement_ratio=4.0,
+)
+```
+
+### Building Abatement / Stacking Exemption
+Exempt a percentage of improvement value from taxation, with a floor exemption.
+
+```python
+from lvt.lvt_utils import model_stacking_improvement_exemption
+
+df = model_stacking_improvement_exemption(
+    df=parcels,
+    land_col='land_value',
+    improvement_col='improvement_value',
+    current_revenue=target_revenue,
+    improvement_exemption_pct=0.75,
+    building_abatement_floor=100_000,
+)
+```
+
+Both solvers maintain **exact revenue neutrality** and support percentage caps, iterative rate-solving, and per-levy modeling (Spokane runs 8 separate levies independently).
+
+---
+
+## Standard Export & Reports
+
+Every city notebook ends with two calls:
+
+```python
+# 1. Write a 16-column standardized CSV
+out_df = save_standard_export(df, city='st_paul', output_path='../../analysis/data/st_paul.csv', ...)
+
+# 2. Generate PNG charts into analysis/reports/<city>/
+create_city_report(out_df, 'st_paul', show=True)
+```
+
+`create_city_report` produces up to 7 charts:
+
+| File | Description |
+|---|---|
+| `category_impact.png` | Horizontal bar: median % tax change by property category |
+| `ten_pct_share.png` | Diverging bar: % of parcels with >10% decrease vs >10% increase |
+| `income_quintile_non_vacant.png` | Green-gradient bar: median % change by neighborhood income quintile (all non-vacant) |
+| `income_quintile_residential.png` | Same, residential parcels only |
+| `minority_quintile_non_vacant.png` | Median % change by neighborhood minority share quintile (all non-vacant) |
+| `minority_quintile_residential.png` | Same, residential parcels only |
+| `distribution.png` | Histogram of parcel-level tax change % |
+
+Census charts are generated when block-group income and minority data are available. The residential filter defaults to Single Family Residential + Small/Large Multi-Family + Other Residential, and can be overridden per city:
+
+```python
+create_city_report(out_df, 'spokane',
+    census_categories=['Single Family Residential', 'Small Multi-Family (2-4 units)'])
+```
+
+---
+
+## Cities Modeled
+
+| City | State | Model | Key Notes |
+|---|---|---|---|
+| St. Paul | MN | Split-rate 4:1 (Tax Capacity) | HF 1342; full city tax bill; condo collapse |
+| Spokane | WA | Building abatement 75% | 8 levies modeled independently |
+| South Bend | IN | Split-rate 4:1 | St. Joseph County ArcGIS |
+| Baltimore | MD | Split-rate | Already has a split-rate; models deeper shift |
+| Pittsburgh | PA | Split-rate (city only) | WPRDC + Allegheny County GIS |
+| Rochester | NY | Split-rate | Homestead/non-homestead split rates |
+| Bellingham | WA | Split-rate | Whatcom County |
+| Cincinnati | OH | Split-rate | Hamilton County |
+| Fort Collins | CO | Split-rate | Larimer County |
+| Morgantown | WV | Split-rate | Monongalia County |
+| Scranton | PA | Split-rate | Lackawanna County |
+| Seattle | WA | Split-rate | King County |
+| Syracuse | NY | Split-rate | Onondaga County |
+
+---
 
 ## Getting Started
 
-### 1. Installation
+### Environment
+
 ```bash
-git clone https://github.com/YOURUSERNAME/LVTShift.git
+git clone https://github.com/gregmiller00/LVTShift.git
 cd LVTShift
 pip install -r requirements.txt
-```
 
-### 2. Set Up Environment Variables
-```bash
-# Copy the template and add your API keys
 cp env.template .env
-# Then edit .env with your actual API keys
+# Add your Census API key (free at api.census.gov/data/key_signup.html)
 ```
-You'll need:
-- **Census API Key**: Get one free at [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html)
 
-### 3. Get Your Data
-The package can work with any county that provides:
-- Property tax assessment data (land value, building value, exemptions)
-- Geographic boundaries (for mapping)
-- Ideally available through an online GIS portal or API
+The recommended Python environment is 3.11+ with `geopandas`, `pandas`, `matplotlib`, `census`, and `jupyter`.
 
-### 4. Run the Analysis
+### Run a city
+
 ```bash
-cd examples
-jupyter notebook southbend.ipynb
+cd cities/st_paul
+jupyter notebook model.ipynb
 ```
 
-### 5. Adapt to Your City
-The Spokane example (`examples/spokane.ipynb`) shows how to:
-- Fetch data from different county systems
-- Handle varying data formats and structures
-- Customize the analysis for local policy questions
+Each notebook auto-detects locally cached data and skips re-scraping if a recent file exists. Set `scrape_data = True` to force a fresh pull.
 
-## Key Features by Module
+### Adding a new city
 
-### `census_utils.py` - Demographics Made Easy
-```python
-from census_utils import get_census_data_with_boundaries
+See `docs/LVT_MODELING_GUIDE.md` for a step-by-step questionnaire covering data sources, column mapping, exemption handling, millage derivation, and standard export wiring.
 
-# Get income and demographic data for any county
-# API key is automatically loaded from environment variables
-census_data, boundaries = get_census_data_with_boundaries(
-    fips_code='18141',  # St. Joseph County, IN
-    year=2022
-)
-
-# Or you can still pass the API key explicitly
-census_data, boundaries = get_census_data_with_boundaries(
-    fips_code='18141',  # St. Joseph County, IN
-    year=2022,
-    api_key='your_census_api_key_here'
-)
-```
-
-### `cloud_utils.py` - Data Fetching
-```python
-from cloud_utils import get_feature_data_with_geometry
-
-# Fetch property data from county GIS systems
-parcels = get_feature_data_with_geometry(
-    'Parcel_Civic', 
-    'https://maps.saintjosephcounty.com/arcgis/rest/services/'
-)
-```
-
-### `lvt_utils.py` - Tax Modeling
-```python
-from lvt_utils import model_split_rate_tax
-
-# Model a 4:1 land-to-building tax ratio
-land_rate, building_rate, revenue, results = model_split_rate_tax(
-    df=property_data,
-    land_value_col='land_value',
-    improvement_value_col='improvement_value',
-    current_revenue=current_tax_revenue,
-    land_improvement_ratio=4
-)
-```
-
-### `policy_analysis.py` - Problem Identification
-```python
-from policy_analysis import analyze_vacant_land, analyze_parking_lots
-
-# Find vacant land speculation patterns
-vacant_analysis = analyze_vacant_land(
-    df=property_data,
-    land_value_col='land_value',
-    property_type_col='prop_use_desc'
-)
-
-# Identify underutilized parking lots
-parking_analysis = analyze_parking_lots(
-    df=property_data,
-    land_value_col='land_value',
-    improvement_value_col='improvement_value'
-)
-```
-
-## Understanding the Output
-
-### Tax Impact Analysis
-- **Positive values**: Property owners pay more under LVT
-- **Negative values**: Property owners pay less under LVT  
-- **Revenue neutral**: Total city revenue remains unchanged
-
-### Property Categories Most Affected
-- **Vacant land**: Usually sees largest increases (good - discourages speculation)
-- **Dense housing**: Usually sees decreases (good - rewards efficient land use)
-- **Parking lots**: Often see increases (good - encourages better land use)
-- **Single-family homes**: Mixed impacts depending on lot size vs. house value
-
-### Equity Considerations
-The analysis helps you answer:
-- Do low-income neighborhoods disproportionately benefit or suffer?
-- Are there racial equity implications?
-- How can policy be designed to address any inequities?
-
-## Use Cases
-
-### 🏛️ **Policymakers & Government Officials**
-- Model revenue-neutral LVT shifts for your jurisdiction
-- Understand constituent impacts before proposing legislation
-- Generate maps and charts for public presentations
-
-### 🏘️ **Housing Advocates**
-- Quantify how property taxes discourage housing development
-- Show how LVT could enable thousands of new housing units
-- Demonstrate impacts on affordability and housing supply
-
-### 📚 **Researchers & Academics**
-- Conduct rigorous analysis of LVT impacts across multiple cities
-- Study relationships between land use, taxation, and development patterns
-- Publish peer-reviewed research on tax policy outcomes
-
-### 🏗️ **Developers & Planners**
-- Understand how tax policy affects development feasibility
-- Identify areas where LVT would most encourage development
-- Plan for policy changes that could affect land values
-
-## Getting Help
-
-- **Examples**: Start with `examples/southbend.ipynb` for a complete walkthrough
-- **Documentation**: Each function includes detailed docstrings
-- **Issues**: Report bugs or request features on GitHub
-- **Questions**: Contact the Center for Land Economics
-
-## Contributing
-
-We welcome contributions! This toolkit is most useful when it can handle data from many different counties and jurisdictions. If you successfully adapt it to a new area, please share your code and data sources.
-
-## License
-MIT License
-
-Copyright (c) 2025 Greg Miller
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ---
 
-*The Center for Land Economics is a nonprofit research organization dedicated to advancing evidence-based land and housing policy. Learn more at [landeconomics.org](https://landeconomics.org).*
+## Key Design Decisions
+
+**Revenue neutrality** — All models maintain identical total revenue. Rate calculation uses `(target_revenue × 1000) / denominator`. An iterative solver (up to 40 iterations) handles percentage caps.
+
+**Flexible column names** — Every function accepts column names as parameters. No hardcoded field names, so the same code works across counties with different schemas.
+
+**Millage rates are per $1,000** — `tax = value × millage / 1000`.
+
+**Centroid-based spatial joins** — Parcels are joined to Census block groups via centroids in EPSG:3857 to avoid boundary edge cases.
+
+**Census fallback chain** — TIGERweb single request → chunked by tract → FTP shapefile download. API calls run in a background thread with a 90-second timeout.
+
+**Condo collapse (St. Paul / Ramsey County)** — Condo units receive token $1,000 land assessments. Before modeling, units are collapsed by PlatID into buildings with imputed land values from neighborhood median improvement ratios.
+
+---
+
+## Output Examples
+
+### Property Category Impact — St. Paul (4:1 split-rate)
+
+Vacant land sees 150%+ tax increases. Small multi-family sees 14% decreases. Single-family sees ~10% decreases.
+
+### Equity Analysis — St. Paul
+
+- Lowest-income neighborhoods (Q1–Q4): 14–16% tax decreases
+- Highest-income neighborhoods (Q5): +13% increase
+- Highest-minority neighborhoods (Q4–Q5): 19–20% decreases
+
+This reflects the core LVT equity story: low-income neighborhoods tend to have high improvement-to-land ratios (dense housing on modest land), while wealthy neighborhoods often hold high-value land with lower improvement density.
+
+---
+
+## License
+
+MIT License — Copyright (c) 2025 Greg Miller
+
+---
+
+*The Center for Land Economics is a nonprofit research organization dedicated to evidence-based land and housing policy. [landeconomics.org](https://landeconomics.org)*
