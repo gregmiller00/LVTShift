@@ -23,9 +23,7 @@ Do not proceed until you have explicit answers. These decisions cannot be change
    [ ] Yes — preserve existing structure, only change the rate split
    [ ] No — what changes? ___
 
-4. What is the county and state?  ___  (need for Census FIPS code)
-
-5. Do you know of an official revenue figure to validate against?
+4. Do you know of an official revenue figure to validate against?
    Source: ___   Amount: $___
 ```
 
