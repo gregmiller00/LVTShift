@@ -246,12 +246,14 @@ try:
         try:
             census_data, census_gdf = _future.result(timeout=90)
             gdf = match_to_census_blockgroups(gdf, census_gdf)
-            # Merge demographic attributes onto gdf by std_geoid
-            _demo_cols = ['std_geoid', 'median_income', 'minority_pct', 'black_pct', 'total_pop']
-            gdf = gdf.merge(
-                census_data[[c for c in _demo_cols if c in census_data.columns]],
-                on='std_geoid', how='left'
-            )
+            # census_gdf already carries demographics — spatial join adds them above.
+            # Do NOT do a second gdf.merge(census_data) here: census_gdf has the columns
+            # baked in, so a second merge creates median_income_x/y duplicates and silently
+            # zeros out all demographic output.
+            if 'minority_pct' not in gdf.columns and 'total_pop' in gdf.columns and 'white_pop' in gdf.columns:
+                gdf['minority_pct'] = ((gdf['total_pop'] - gdf['white_pop']) / gdf['total_pop'] * 100).round(2)
+            if 'black_pct' not in gdf.columns and 'total_pop' in gdf.columns and 'black_pop' in gdf.columns:
+                gdf['black_pct'] = (gdf['black_pop'] / gdf['total_pop'] * 100).round(2)
             print(f"Census join: {gdf['std_geoid'].notna().mean()*100:.1f}% matched")
         except concurrent.futures.TimeoutError:
             print("Census API timed out — skipping census join")
