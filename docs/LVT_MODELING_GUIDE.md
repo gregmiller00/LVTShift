@@ -1,38 +1,89 @@
 # LVT Modeling Guide
 
-To add a new city, work through these skills in order. Each skill is self-contained — read it, do the work it describes, then move to the next.
+To add a new city, invoke the **add-city** skill (type `add [city] to LVTShift`). It runs the full pipeline end-to-end and calls the sub-skills below in order.
 
 ---
 
 ## Skills
 
-1. **[Fetch Data](skills/fetch-data.md)** — Find the county ArcGIS endpoint, inspect it, download parcel data, filter to the city, validate completeness.
+The pipeline has one master orchestrator and four sub-skills:
 
-2. **[Model Tax](skills/model-tax.md)** — Identify the correct millage, implement exemption logic, classify properties, run the split-rate or abatement model, validate revenue neutrality.
-
-3. **[Validate Results](skills/validate-results.md)** — Check revenue match against official figures, confirm distribution sanity, verify Census join, check the export CSV.
-
-4. **[Export & Visualize](skills/export-visualize.md)** — Call `save_standard_export()`, produce the standard 5-chart suite using consistent styles.
-
----
-
-## Notebook structure
-
-Every city notebook follows the same 7-section structure. See [notebook-template.md](skills/notebook-template.md) for the template with annotated code.
-
-| Section | Contents | City-specific? |
+| Skill | File | What it does |
 |---|---|---|
-| 1. Configuration | All parameters, imports, `apply_lvt_style()` | Yes |
-| 2. Data | Fetch or load from cache | Yes |
-| 3. Preprocessing | Filtering, validation, condo collapse | Yes |
-| 4. Tax Modeling | Current tax + LVT model | Yes |
-| 5. Export | `save_standard_export()` call | Minimal (args only) |
-| 6. Analysis | Category summaries, policy analysis | No |
-| 7. Equity & Visualization | Census join, quintile charts | No |
+| **Add City** (master) | `.claude/skills/add-city.md` | Policy questions → full 7-step pipeline |
+| **Discover Data** | `.claude/skills/discover-data.md` | Find ArcGIS endpoint, download, filter, validate |
+| **Model Policy** | `.claude/skills/model-policy.md` | Assessment ratios, millage sources, exemptions, split-rate or abatement |
+| **Build Notebook** | `.claude/skills/build-notebook.md` | Canonical 7-section template with exact closing pattern |
+| **Validate** | `.claude/skills/validate.md` | Revenue match, distribution sanity, census coverage, PNG output |
 
 ---
 
-## Standard CSV output
+## Notebook Structure
+
+Every city notebook follows the same 7-section structure:
+
+| Section | Contents |
+|---|---|
+| 1. Imports & Setup | `sys.path`, imports, constants (`CITY_NAME`, `STATE_FIPS`, `COUNTY_FIPS`, `MODEL_TYPE`) |
+| 2. Fetch / Load Data | `get_feature_data_with_geometry()`, city filter, cache to `data/` |
+| 3. Classify & Validate | Exemption flags, `PROPERTY_CATEGORY` mapping, revenue validation |
+| 4. Current Tax Model | `calculate_current_tax()`, revenue match assertion |
+| 5. Split-Rate Model | `model_split_rate_tax()` or `model_stacking_improvement_exemption()` |
+| 6. Exploration Charts | Optional city-specific charts (skipped in headless execution) |
+| 7. Census Join + Export | Exact canonical pattern — see `build-notebook.md` |
+
+---
+
+## Modeling Approaches
+
+### Split-Rate (most cities)
+
+Land taxed at N× the improvement rate. Both stay revenue-neutral.
+
+```python
+land_millage, improvement_millage, revenue, df = model_split_rate_tax(
+    df=parcels,
+    land_value_col='taxable_land_value',
+    improvement_value_col='taxable_improvement_value',
+    current_revenue=current_revenue,
+    land_improvement_ratio=4.0,
+)
+```
+
+### Building Abatement (Spokane)
+
+Exempt a percentage of improvement value per levy. See `model-policy.md` Part B6.
+
+```python
+df = model_stacking_improvement_exemption(
+    df=parcels,
+    land_col='land_value',
+    improvement_col='improvement_value',
+    current_revenue=target_revenue,
+    improvement_exemption_pct=0.75,
+    building_abatement_floor=100_000,
+)
+```
+
+### Assessment Ratio (Cincinnati / Ohio)
+
+Apply 35% ratio before modeling. See `model-policy.md` Part B2.
+
+### Tax Capacity (St. Paul / Minnesota)
+
+Split the pre-computed `TaxCapacity` column by improvement ratio. See `model-policy.md` Part B3.
+
+### Derived Millage (Baltimore)
+
+Back-calculate millage from observed tax bills. See `model-policy.md` Part B4.
+
+### Dual Homestead/Non-Homestead (Rochester / New York)
+
+Model homestead and non-homestead parcels with separate millage rates and separate revenue neutrality. See `model-policy.md` Part B5.
+
+---
+
+## Standard CSV Output
 
 Every city produces `analysis/data/<city>.csv` with these 16 columns:
 
@@ -42,7 +93,7 @@ Every city produces `analysis/data/<city>.csv` with these 16 columns:
 | `property_category` | Standardized property type |
 | `current_tax` | Current tax ($) |
 | `new_tax` | Modeled LVT tax ($) |
-| `tax_change` | new - current ($) |
+| `tax_change` | new − current ($) |
 | `tax_change_pct` | Percentage change (null if current = 0) |
 | `taxable_land_value` | Post-exemption land value used in model |
 | `taxable_improvement_value` | Post-exemption improvement value |
@@ -55,23 +106,40 @@ Every city produces `analysis/data/<city>.csv` with these 16 columns:
 | `land_millage` | Effective land millage per $1,000 |
 | `improvement_millage` | Effective improvement millage per $1,000 |
 
-**Model type format:** `<kind>:<param>[,<kind>:<param>]`
-- `split_rate:4.0` — 4:1 land-to-improvement ratio
-- `abatement:50pct` — 50% building abatement
-- `abatement:100pct` — full building exemption
-- `exemption:50000` — $50,000 dollar base exemption on improvements
-- Stacked: `split_rate:4.0,exemption:50000`
+---
+
+## Standard Report Output
+
+`create_city_report()` produces up to 7 PNGs in `analysis/reports/<city>/`:
+
+| File | Description |
+|---|---|
+| `category_impact.png` | Median % tax change by property category |
+| `ten_pct_share.png` | % of parcels with >10% decrease vs. increase |
+| `distribution.png` | Histogram of parcel-level tax change % |
+| `income_quintile_non_vacant.png` | Median % change by income quintile (all non-vacant) |
+| `income_quintile_residential.png` | Same, residential only |
+| `minority_quintile_non_vacant.png` | Median % change by minority share quintile |
+| `minority_quintile_residential.png` | Same, residential only |
+
+Census charts are generated only when block-group income and minority data are available (≥ 70% Census join rate).
 
 ---
 
-## Cross-city analysis
+## Execution
 
-Once CSVs exist for multiple cities, open `analysis/cross_city.ipynb` to compare results across cities — revenue figures, equity impacts, property category distributions.
+```bash
+# Run one city
+cd cities/<city> && \
+jupyter nbconvert --to notebook --execute --inplace \
+  --ExecutePreprocessor.timeout=600 \
+  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  model.ipynb 2>&1
 
-## Regression validation
-
-After any code change to `lvt_utils.py` or `viz.py`, run `analysis/validate_all.ipynb` to confirm all cities produce the same metrics as before.
-
----
-
-*Previous guide content is archived in `LVT_MODELING_GUIDE_ARCHIVE.md`.*
+# Re-run cross-city comparison
+cd analysis && \
+jupyter nbconvert --to notebook --execute --inplace \
+  --ExecutePreprocessor.timeout=300 \
+  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  cross_city.ipynb 2>&1
+```
