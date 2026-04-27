@@ -83,6 +83,24 @@ Model homestead and non-homestead parcels with separate millage rates and separa
 
 ---
 
+## Property Categories
+
+Use `PROPERTY_CATEGORY` for category summaries and the standard export. Start with the broad cross-city categories, but keep more detail when the assessor data supports it and the class is large or policy-relevant. In particular, split these classes instead of burying them in broad `Residential` or `Commercial` buckets:
+
+| Category | Use when source data identifies |
+|---|---|
+| `Condominium` | Residential condo/unit records |
+| `Townhome / Rowhouse` | Townhomes, rowhomes, rowhouse developments |
+| `Mixed Use` | Mixed commercial/residential parcels or buildings |
+| `Hotel` | Hotels, motels, rooming houses, apartment hotels |
+| `Office / Commercial Condo` | Office buildings and commercial condo/garage units |
+| `Retail / General Commercial` | Retail, shopping centers, supermarkets, one-story/general commercial, minor commercial |
+| `Other Commercial` | Meaningful commercial classes not covered above |
+
+Keep `Other Residential`, `Other Commercial`, and `Other` as true residual buckets. If a residual bucket is large, inspect the source class codes and add a better mapping before exporting.
+
+---
+
 ## Standard CSV Output
 
 Every city produces `analysis/data/<city>.csv` with these 16 columns:

@@ -930,6 +930,9 @@ _RESIDENTIAL_CATEGORIES: List[str] = [
     'Small Multi-Family (2-4 units)',
     'Large Multi-Family (5+ units)',
     'Other Residential',
+    'Condominium',
+    'Townhome / Rowhouse',
+    'Mixed Use',
 ]
 
 
