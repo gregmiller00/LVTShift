@@ -126,7 +126,13 @@ CATEGORY_MAP = {
     '100': 'Single Family Residential',
     '200': 'Small Multi-Family (2-4 units)',
     '300': 'Large Multi-Family (5+ units)',
-    '400': 'Commercial',
+    '350': 'Condominium',
+    '360': 'Townhome / Rowhouse',
+    '370': 'Mixed Use',
+    '400': 'Retail / General Commercial',
+    '410': 'Office / Commercial Condo',
+    '420': 'Hotel',
+    '430': 'Other Commercial',
     '500': 'Industrial',
     '600': 'Vacant Land',
     '700': 'Agricultural',
@@ -140,6 +146,8 @@ gdf.loc[gdf['IMPROVEMENT_VALUE'] <= 0, 'PROPERTY_CATEGORY'] = 'Vacant Land'
 
 print(gdf['PROPERTY_CATEGORY'].value_counts())
 ```
+
+When a city provides detailed assessor class codes, prefer a small city-specific classifier function over a flat one-to-one map. Split condos, townhomes/rowhouses, mixed-use parcels, hotels, office/commercial condos, and retail/general commercial when the source codes support those distinctions. Keep `Other Residential`, `Other Commercial`, and `Other` as residual buckets, then print the source-code counts inside those residuals and refine the mapping if they are large.
 
 ---
 

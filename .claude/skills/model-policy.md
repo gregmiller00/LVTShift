@@ -273,7 +273,14 @@ Single Family Residential
 Small Multi-Family (2-4 units)
 Large Multi-Family (5+ units)
 Other Residential
+Condominium
+Townhome / Rowhouse
+Mixed Use
 Commercial
+Retail / General Commercial
+Office / Commercial Condo
+Hotel
+Other Commercial
 Industrial
 Vacant Land
 Agricultural
@@ -281,6 +288,17 @@ Transportation - Parking
 Exempt
 Other
 ```
+
+Use the most specific category the source data can support without inventing detail. In dense cities with rich parcel class codes, do not collapse everything into broad residential/commercial buckets:
+
+- Split residential condominiums into `Condominium` when condo/unit codes exist.
+- Split townhomes, rowhomes, and rowhouse developments into `Townhome / Rowhouse` when identified separately from detached single-family homes.
+- Split mixed commercial/residential parcels into `Mixed Use` when the assessor has a mixed-use code or clear mixed-use description. If a source splits mixed-use parcels into separate residential and commercial assessment records, preserve the source split instead of forcing a mixed-use label.
+- Split hotels, motels, and rooming/apartment hotels into `Hotel`.
+- Split office buildings and commercial condominium units/garages into `Office / Commercial Condo`.
+- Split retail, shopping centers, supermarkets, one-story general commercial, and minor general-commercial improvements into `Retail / General Commercial`.
+- Use `Other Commercial` for commercial subtypes that are meaningful but not one of the above and not numerous enough to warrant a city-specific category.
+- Keep `Other Residential` and `Other` small. If either exceeds roughly 10% of parcels or contains a policy-relevant class, inspect the underlying codes and add a better category mapping.
 
 Key override rule: **any parcel with $0 improvement value → 'Vacant Land'**, regardless of use code. This catches empty lots that are coded as "Commercial" or "Residential" by mistake.
 
