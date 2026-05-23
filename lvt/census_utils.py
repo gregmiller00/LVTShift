@@ -755,8 +755,116 @@ def create_demographic_summary(
         summary['total_current_tax']
     ) * 100
     summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
-    
+
     # Reset index
     summary = summary.reset_index()
-    
+
     return summary
+
+
+def get_acs_blockgroups_supplemental(
+    fips_code: str,
+    variables: List[str],
+    year: int = 2022,
+    api_key: Optional[str] = None,
+    column_aliases: Optional[Dict[str, str]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch arbitrary ACS 5-year variables for every block group in a county.
+
+    A complement to `get_census_data_with_boundaries`, which returns a fixed set
+    of median income and racial composition variables. This helper lets callers
+    pull additional tables (wealth, tenure, aggregate income, total population,
+    sub-population age cuts, etc.) without re-deriving the URL shape and the
+    GEO_ID -> 12-char block-group key conversion.
+
+    Parameters
+    ----------
+    fips_code : str
+        5-digit state + county FIPS (e.g. "19153" for Polk County, IA).
+    variables : list of str
+        ACS table codes (e.g. "B25077_001E"). Pass at most ~50 per call (Census
+        API limit). The function appends "GEO_ID" automatically.
+    year : int, default 2022
+        ACS 5-year vintage. The Census Python library's TIGER vintage list ends
+        at 2022, so default matches `get_census_data_with_boundaries`.
+    api_key : str, optional
+        Census API key. Falls back to CENSUS_API_KEY env var.
+    column_aliases : dict, optional
+        Rename map applied after fetch (e.g. {"B25077_001E": "median_home_value"}).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: std_geoid (12-char block group), plus one column per requested
+        variable (renamed if `column_aliases` is provided). Values are coerced
+        numeric with negatives clipped to NaN.
+
+    Raises
+    ------
+    ValueError
+        If fips_code is not 5 characters or no API key is available.
+    requests.HTTPError
+        If the Census endpoint returns a non-200 response.
+    """
+    if not isinstance(fips_code, str) or len(fips_code) != 5:
+        raise ValueError("fips_code must be a 5-character string (state+county)")
+    if not variables:
+        raise ValueError("variables must be a non-empty list of ACS codes")
+
+    if not api_key:
+        api_key = os.getenv("CENSUS_API_KEY")
+    if not api_key:
+        raise ValueError("Census API key must be provided or set in CENSUS_API_KEY")
+
+    state_fips = fips_code[:2]
+    county_fips = fips_code[2:]
+
+    get_param = ",".join(list(variables) + ["GEO_ID"])
+    resp = requests.get(
+        f"https://api.census.gov/data/{year}/acs/acs5",
+        params={
+            "get": get_param,
+            "for": "block group:*",
+            "in": f"state:{state_fips} county:{county_fips}",
+            "key": api_key,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload or len(payload) < 2:
+        return pd.DataFrame(columns=["std_geoid"] + list(variables))
+
+    df = pd.DataFrame(payload[1:], columns=payload[0])
+    df["std_geoid"] = (
+        df["state"].astype(str)
+        + df["county"].astype(str)
+        + df["tract"].astype(str)
+        + df["block group"].astype(str)
+    )
+    for v in variables:
+        df[v] = pd.to_numeric(df[v], errors="coerce")
+        df.loc[df[v] < 0, v] = np.nan
+
+    keep = ["std_geoid"] + list(variables)
+    out = df[keep].copy()
+    if column_aliases:
+        out = out.rename(columns=column_aliases)
+    return out
+
+
+def normalize_acs_geoid(series: pd.Series) -> pd.Series:
+    """
+    Convert ACS API `GEO_ID` (e.g. "1500000US191530101001") to 12-char block-group key.
+
+    The Census ACS API returns a 20-character GEO_ID with a 7-character prefix
+    ("1500000US" for block groups); TIGER block-group shapefiles use the bare
+    12-character SSSCCCTTTTTTB key. This helper strips the prefix safely whether
+    the prefix is present or not.
+
+    Returns a string Series. NaN inputs become "".
+    """
+    s = series.fillna("").astype(str)
+    return s.str.replace(r"^[0-9A-Z]+US", "", regex=True).str[-12:]
+

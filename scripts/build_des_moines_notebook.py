@@ -102,6 +102,8 @@ load_dotenv(REPO_ROOT / ".env")
 
 import lvt_utils
 import viz  # bundled visualization helpers
+import policy_analysis
+import lodes_utils
 '''))
 
 # ---------------------------------------------------------------------------
@@ -222,9 +224,11 @@ def _taxable_value(row: pd.Series) -> float:
     if bucket == "residential":
         return fmv * ROLLBACK_RESIDENTIAL
     if bucket == "commercial":
-        tier1 = min(fmv, COMM_TIER1_THRESHOLD) * COMM_TIER1_RATE
-        tier2 = max(fmv - COMM_TIER1_THRESHOLD, 0.0) * COMM_TIER2_RATE
-        return tier1 + tier2
+        # Iowa two-tier (lvt_utils.apply_two_tier_rollback): first $150K at
+        # residential rate, remainder at 90%.
+        return lvt_utils.apply_two_tier_rollback(
+            fmv, COMM_TIER1_THRESHOLD, COMM_TIER1_RATE, COMM_TIER2_RATE
+        )
     if bucket == "agricultural":
         return fmv * ROLLBACK_AGRICULTURAL
     if bucket == "utility":
@@ -241,20 +245,15 @@ imp_share = 1.0 - land_share
 gdf["taxable_land_value"] = (gdf["taxable_value"] * land_share).fillna(0.0).clip(lower=0.0)
 gdf["taxable_improvement_value"] = (gdf["taxable_value"] * imp_share).fillna(0.0).clip(lower=0.0)
 
-# Build a chart-friendly category that pulls Vacant / Parking Lot /
-# Underdeveloped parcels (from the refined PROPERTY_CATEGORY) out into their
-# own rows; everything else keeps its Polk class.
-#
-# Exception: agricultural parcels stay as "Agricultural" (their Polk class)
-# even when the refined classifier flags them as Vacant — undeveloped farmland
-# trips the vacant heuristic (improvement_value <= 0 with positive land_value)
-# but is actively in use as ag, not a redevelopment target. Same logic for
-# the "Ag, Ag Res" combined class.
-_refined_breakouts = {"Vacant", "Parking Lot", "Underdeveloped"}
-gdf["chart_category"] = np.where(
-    gdf["PROPERTY_CATEGORY"].isin(_refined_breakouts) & (gdf["rollback_bucket"] != "agricultural"),
-    gdf["PROPERTY_CATEGORY"],
-    gdf["property_land_use_category"],
+# Build a chart-friendly category via policy_analysis.build_chart_category.
+# Vacant / Parking Lot / Underdeveloped parcels get their own rows EXCEPT
+# when they're agricultural (undeveloped farmland trips the vacant heuristic
+# but is actively in use as ag, not a redevelopment target).
+gdf["chart_category"] = policy_analysis.build_chart_category(
+    gdf,
+    base_col="property_land_use_category",
+    refined_col="PROPERTY_CATEGORY",
+    exclude_mask=(gdf["rollback_bucket"] == "agricultural"),
 )
 
 print("Rollback bucket distribution:")
@@ -329,69 +328,23 @@ AG_CARVEOUT_CATEGORIES = {"Agricultural", "Ag, Ag Res"}
 
 def run_scenarios(input_df: pd.DataFrame, target_revenue: float,
                   exclude_ag: bool = True) -> dict:
-    """Run revenue-neutral reform scenarios.
-
-    Ag carve-out (default on): ag parcels are pulled out of the solver,
-    the target is reduced by their current property tax, and they're
-    reinserted into each result with new_tax = current_tax.
-    """
+    """Thin wrapper around lvt_utils.run_revenue_neutral_scenarios that picks the
+    DM-specific carve-out mask (chart_category in {"Agricultural", "Ag, Ag Res"})."""
     if exclude_ag and "chart_category" in input_df.columns:
-        ag_mask = input_df["chart_category"].isin(AG_CARVEOUT_CATEGORIES)
-        ag_rows = input_df.loc[ag_mask].copy()
-        ag_current_tax_sum = float(ag_rows["current_tax"].sum()) if "current_tax" in ag_rows.columns else 0.0
-        solve_df = input_df.loc[~ag_mask].copy()
-        solve_target = target_revenue - ag_current_tax_sum
+        mask = input_df["chart_category"].isin(AG_CARVEOUT_CATEGORIES)
     else:
-        ag_rows = None
-        solve_df = input_df
-        solve_target = target_revenue
-
-    def _reinsert_ag(df_out):
-        if ag_rows is None or len(ag_rows) == 0:
-            return df_out
-        ag_appended = ag_rows.copy()
-        ag_appended["new_tax"] = ag_appended["current_tax"]
-        if "tax_change" in df_out.columns and "tax_change" not in ag_appended.columns:
-            ag_appended["tax_change"] = 0.0
-        return pd.concat([df_out, ag_appended], ignore_index=True, sort=False)
-
-    results = {}
-    for ratio in [2.0, 4.0, 8.0]:
-        land_mill, imp_mill, new_rev, df = lvt_utils.model_split_rate_tax(
-            solve_df.copy(),
-            land_value_col="taxable_land_value",
-            improvement_value_col="taxable_improvement_value",
-            current_revenue=solve_target,
-            land_improvement_ratio=ratio,
-            exemption_col=None,
-            exemption_flag_col="exemption_flag",
-        )
-        df = _reinsert_ag(df)
-        results[f"split_{int(ratio)}_1"] = {
-            "label": f"Split-rate {int(ratio)}:1",
-            "land_millage": land_mill,
-            "improvement_millage": imp_mill,
-            "new_revenue": new_rev + (ag_current_tax_sum if exclude_ag else 0.0),
-            "df": df,
-        }
-    mill, new_rev, df = lvt_utils.model_full_building_abatement(
-        solve_df.copy(),
+        mask = None
+    return lvt_utils.run_revenue_neutral_scenarios(
+        input_df,
+        target_revenue=target_revenue,
         land_value_col="taxable_land_value",
         improvement_value_col="taxable_improvement_value",
-        current_revenue=solve_target,
-        abatement_percentage=1.0,
-        exemption_col=None,
+        ratios=(2.0, 4.0, 8.0),
+        include_full_abatement=True,
+        exclude_mask=mask,
+        current_tax_col="current_tax",
         exemption_flag_col="exemption_flag",
     )
-    df = _reinsert_ag(df)
-    results["full_abatement"] = {
-        "label": "Full building abatement (100%)",
-        "land_millage": mill,
-        "improvement_millage": 0.0,
-        "new_revenue": new_rev + (ag_current_tax_sum if exclude_ag else 0.0),
-        "df": df,
-    }
-    return results
 
 scenarios_all = run_scenarios(gdf, total_revenue)
 print(f"{'Scenario':<35}{'Land mills':>14}{'Imp mills':>14}{'New revenue':>18}{'Drift':>10}")
@@ -1042,36 +995,16 @@ LODES jobs counts. For now we treat all "eligible" sectors as paying
 corporate tax proportional to their job count."""))
 
 cells.append(code(r'''if swap_ready:
-    import gzip, io as _io
-
     LODES_YEAR = 2022
-    LODES_URL = f"https://lehd.ces.census.gov/data/lodes/LODES8/ia/wac/ia_wac_S000_JT00_{LODES_YEAR}.csv.gz"
-    LODES_CACHE = data_dir / f"lodes_ia_wac_{LODES_YEAR}.parquet"
-
-    if LODES_CACHE.exists():
-        print(f"Using cached LODES: {LODES_CACHE.name}")
-        lodes = pd.read_parquet(LODES_CACHE)
-    else:
-        print(f"Fetching LODES WAC IA {LODES_YEAR} from LEHD...")
-        _resp = requests.get(LODES_URL, timeout=60)
-        _resp.raise_for_status()
-        lodes = pd.read_csv(_io.BytesIO(gzip.decompress(_resp.content)))
-        LODES_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        lodes.to_parquet(LODES_CACHE, index=False)
-        print(f"Saved {len(lodes):,} block rows to {LODES_CACHE.name}")
-
-    # Sectors that don't meaningfully pay corporate income tax (dominated by
-    # government / nonprofit). Drop these from the eligible-jobs total.
-    EXCLUDED_CNS = {"CNS15", "CNS16", "CNS20"}  # educational, health care, public admin
-    all_cns = [c for c in lodes.columns if c.startswith("CNS")]
-    included_cns = [c for c in all_cns if c not in EXCLUDED_CNS]
-    lodes["eligible_jobs"] = lodes[included_cns].sum(axis=1)
-    lodes["GEOID"] = lodes["w_geocode"].astype(str).str.zfill(15)
+    # lodes_utils handles the LEHD fetch + 15-char GEOID padding + cache.
+    # DEFAULT_EXCLUDED_SECTORS = {CNS15 education, CNS16 health, CNS20 public admin}.
+    lodes = lodes_utils.fetch_lodes_wac(state="ia", year=LODES_YEAR, cache_dir=data_dir)
+    lodes = lodes_utils.compute_eligible_jobs(lodes)
+    lodes["GEOID"] = lodes["w_geocode"]
     lodes_blocks = lodes[["GEOID", "C000", "eligible_jobs"]].rename(columns={"C000": "block_total_jobs"})
 
     # Merge into swap_df via 15-char block GEOID (already on `matched`).
     if "GEOID" not in swap_df.columns and "GEOID" in matched.columns:
-        # safety: copy GEOID over if it got dropped somewhere
         swap_df = swap_df.merge(matched[["parcel_id", "GEOID"]], on="parcel_id", how="left")
     swap_df["GEOID"] = swap_df["GEOID"].astype(str)
     swap_df = swap_df.merge(lodes_blocks, on="GEOID", how="left")
@@ -1129,26 +1062,21 @@ cells.append(code(r'''if swap_ready:
     dm_personal_share = float(swap_df["parcel_personal_burden"].sum()) / IOWA_PERSONAL_INCOME_TAX_FY26
     dm_corporate_burden_total = dm_personal_share * IOWA_CORPORATE_INCOME_TAX_FY26
 
-    # Weight = parcel_value × block_eligible_jobs, restricted to corporate parcels.
-    _block_jobs = swap_df["eligible_jobs"] if "eligible_jobs" in swap_df.columns else 0
-    swap_df["_corp_weight"] = np.where(
-        is_corporate,
-        swap_df["full_market_value"].fillna(0) * _block_jobs,
-        0.0,
+    # lodes_utils.allocate_by_jobs_and_value handles the
+    # parcel_value × block_eligible_jobs weighting with a flat-by-value
+    # fallback if the LODES merge produced zero jobs everywhere.
+    # The swap_df already has block-level eligible_jobs merged in (above),
+    # so we pass swap_df itself as both the parcels frame and the lookup table.
+    swap_df["parcel_corporate_burden"] = lodes_utils.allocate_by_jobs_and_value(
+        parcels_df=swap_df,
+        lodes_df=swap_df[["GEOID", "eligible_jobs"]].drop_duplicates(subset=["GEOID"]),
+        total_dollars=dm_corporate_burden_total,
+        parcel_value_col="full_market_value",
+        target_mask=is_corporate,
+        parcel_block_col="GEOID",
+        lodes_block_col="GEOID",
+        lodes_jobs_col="eligible_jobs",
     )
-    total_corp_weight = swap_df["_corp_weight"].sum()
-    if total_corp_weight > 0:
-        swap_df["parcel_corporate_burden"] = (
-            swap_df["_corp_weight"] / total_corp_weight * dm_corporate_burden_total
-        )
-    else:
-        # Fallback to flat-by-value if LODES merge produced zero jobs everywhere
-        # (e.g., LODES fetch failed). Same as the pre-LODES allocation.
-        dm_corporate_value_sum = swap_df["full_market_value"].where(is_corporate, 0.0).sum()
-        swap_df["parcel_corporate_burden"] = (
-            swap_df["full_market_value"].where(is_corporate, 0.0)
-            * (dm_corporate_burden_total / dm_corporate_value_sum if dm_corporate_value_sum > 0 else 0)
-        )
 
     swap_df["parcel_income_tax_burden"] = (
         swap_df["parcel_personal_burden"] + swap_df["parcel_corporate_burden"]
@@ -1455,18 +1383,20 @@ print(f"Citizens dividend rate: ${DIVIDEND_PER_CAPITA:,.0f} per resident per yea
 '''))
 
 cells.append(code(r'''if swap_ready:
-    # Allocate ACS block-group population to residential + agricultural parcels,
-    # weighted by full market value (consistent with the personal-income-tax
-    # allocation in the swap section).
+    # Allocate ACS block-group population (B01003) to residential + agricultural
+    # parcels, weighted by full market value (consistent with the personal-
+    # income-tax allocation in the swap section). policy_analysis.
+    # allocate_bg_total_by_weight conserves each BG's total within its own
+    # rows — exactly what we want for population.
     household_buckets = {"residential", "agricultural"}
     is_household = swap_df["rollback_bucket"].isin(household_buckets)
-    _hh_value = swap_df["full_market_value"].where(is_household, 0.0)
-    bg_hh_value_sum = swap_df.groupby("std_geoid")["full_market_value"].transform(
-        lambda v: v.where(is_household.loc[v.index], 0.0).sum()
-    ).replace(0, np.nan)
-    swap_df["parcel_residents"] = (
-        swap_df["bg_total_pop"] * _hh_value / bg_hh_value_sum
-    ).fillna(0.0)
+    swap_df["parcel_residents"] = policy_analysis.allocate_bg_total_by_weight(
+        swap_df,
+        bg_col="std_geoid",
+        bg_total_col="bg_total_pop",
+        weight_col="full_market_value",
+        target_mask=is_household,
+    )
     swap_df["parcel_dividend"] = DIVIDEND_PER_CAPITA * swap_df["parcel_residents"]
 
     total_dm_population = swap_df.drop_duplicates(subset=["std_geoid"])["bg_total_pop"].sum()

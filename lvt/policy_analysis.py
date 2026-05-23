@@ -740,4 +740,171 @@ def print_property_values_summary(summary_df: pd.DataFrame,
         print(f"Total Exemptions: ${summary_df['total_exemptions'].sum():,.0f}")
     
     if 'fully_exempt_count' in summary_df.columns:
-        print(f"Fully Exempt Properties: {summary_df['fully_exempt_count'].sum():,.0f}") 
+        print(f"Fully Exempt Properties: {summary_df['fully_exempt_count'].sum():,.0f}")
+
+
+def build_chart_category(
+    df: pd.DataFrame,
+    base_col: str,
+    refined_col: str,
+    refined_buckets: Optional[Union[set, List[str], Tuple[str, ...]]] = (
+        "Vacant", "Parking Lot", "Underdeveloped",
+    ),
+    exclude_mask: Optional[pd.Series] = None,
+) -> pd.Series:
+    """
+    Compose a chart-friendly category column that breaks out refined buckets
+    (Vacant / Parking Lot / Underdeveloped) into their own rows where present,
+    and falls back to the base assessor class everywhere else.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Parcel-level data.
+    base_col : str
+        Column holding the raw assessor class string (e.g. "Residential",
+        "Comm", "Industrial").
+    refined_col : str
+        Column holding the refined classifier ("Vacant", "Parking Lot",
+        "Underdeveloped", or null).
+    refined_buckets : iterable of str, optional
+        The refined values to break out. Default covers the three categories
+        produced by `policy_analysis.analyze_vacant_land` /
+        `analyze_parking_lots` / `analyze_land_by_improvement_share`.
+    exclude_mask : pd.Series, optional
+        Boolean mask; where True, the parcel keeps its base class even if the
+        refined column matches. Use this to keep productivity-assessed
+        agricultural parcels labeled as their base class even when the refined
+        classifier flags them as Vacant.
+
+    Returns
+    -------
+    pd.Series
+        Same index as `df`; string-typed.
+    """
+    refined = df[refined_col]
+    base = df[base_col]
+    buckets = set(refined_buckets) if refined_buckets is not None else set()
+    in_refined = refined.isin(buckets)
+    if exclude_mask is not None:
+        in_refined = in_refined & ~exclude_mask.reindex(df.index, fill_value=False).astype(bool)
+    return pd.Series(np.where(in_refined, refined, base), index=df.index).astype(str)
+
+
+def allocate_by_bg_weight(
+    df: pd.DataFrame,
+    bg_col: str,
+    weight_col: str,
+    total_dollars: float,
+    target_mask: Optional[pd.Series] = None,
+) -> pd.Series:
+    """
+    Distribute `total_dollars` across rows weighted by `weight_col` within each
+    block group, optionally restricted to a target subset.
+
+    Used for per-parcel allocation of block-group aggregates (per-household
+    income-tax burden, per-resident dividend payout, anything where the BG-level
+    total is known and parcels need a proportional share).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Parcel-level data with a block-group identifier column.
+    bg_col : str
+        Block-group identifier (typically std_geoid). Rows with NaN here get
+        zero allocation.
+    weight_col : str
+        Column whose values define each parcel's share within its block group.
+        Typically full_market_value or land_value. Negative values are clipped
+        to 0.
+    total_dollars : float
+        The pool to allocate. The function does NOT enforce that the per-parcel
+        sum equals total_dollars exactly — block groups missing target parcels
+        forfeit their share. This matches the realistic case where an
+        agricultural BG has no commercial parcels to absorb a commercial
+        allocation.
+    target_mask : pd.Series, optional
+        Boolean mask; only rows where mask is True are eligible for allocation.
+        Non-target rows receive 0.
+
+    Returns
+    -------
+    pd.Series
+        Same index as `df`, float-typed, dollars per parcel. Sums to <= total
+        depending on coverage.
+    """
+    weight = pd.to_numeric(df[weight_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+    if target_mask is not None:
+        mask = target_mask.reindex(df.index, fill_value=False).astype(bool)
+        weight = weight.where(mask, 0.0)
+
+    # BG-level totals from the eligible weight, then per-row share within BG.
+    bg_totals = weight.groupby(df[bg_col]).transform("sum").replace(0.0, np.nan)
+    parcel_share = (weight / bg_totals).fillna(0.0)
+
+    # Each BG's portion of total_dollars is proportional to its share of the
+    # total eligible weight across all BGs.
+    bg_pool_share = bg_totals / weight.sum() if weight.sum() > 0 else 0.0
+    # parcel_share × bg_pool_share × total_dollars  reduces to
+    # (weight / total_weight) × total_dollars — i.e. citywide-flat by weight.
+    # That's the right answer when there is no "BG-level total" cap.
+    citywide_weight_total = weight.sum()
+    if citywide_weight_total <= 0:
+        return pd.Series(0.0, index=df.index)
+    return (weight / citywide_weight_total) * float(total_dollars)
+
+
+def allocate_bg_total_by_weight(
+    df: pd.DataFrame,
+    bg_col: str,
+    bg_total_col: str,
+    weight_col: str,
+    target_mask: Optional[pd.Series] = None,
+) -> pd.Series:
+    """
+    Distribute each block group's `bg_total_col` value across that BG's rows,
+    weighted by `weight_col`, optionally restricted to a target subset.
+
+    Use this when the BG-level total is itself an input (e.g. ACS B01003 total
+    population per BG, or an ACS aggregate income value that must be conserved
+    within each BG). Differs from `allocate_by_bg_weight`, which spreads a
+    single citywide pool across all BGs.
+
+    Returns
+    -------
+    pd.Series
+        Same index as `df`, float-typed. The sum within each BG equals the
+        BG's `bg_total_col` value (modulo BGs with no eligible target parcels,
+        which contribute zero).
+    """
+    weight = pd.to_numeric(df[weight_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+    if target_mask is not None:
+        mask = target_mask.reindex(df.index, fill_value=False).astype(bool)
+        weight = weight.where(mask, 0.0)
+    bg_total = pd.to_numeric(df[bg_total_col], errors="coerce").fillna(0.0)
+    bg_weight_sum = weight.groupby(df[bg_col]).transform("sum").replace(0.0, np.nan)
+    return (bg_total * weight / bg_weight_sum).fillna(0.0)
+
+
+def land_share_buckets(
+    df: pd.DataFrame,
+    land_value_col: str,
+    improvement_value_col: str,
+    edges: Tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    labels: Optional[List[str]] = None,
+) -> pd.Series:
+    """
+    Bucket parcels into land-share bins.
+
+    `land_share = land_value / (land_value + improvement_value)`. Parcels with
+    zero total value get NaN. Default edges give five 20%-wide bins.
+
+    Returns a categorical Series aligned to `df.index`.
+    """
+    land = pd.to_numeric(df[land_value_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+    imp = pd.to_numeric(df[improvement_value_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+    total = land + imp
+    share = (land / total.replace(0.0, np.nan))
+    if labels is None:
+        labels = [f"{int(edges[i]*100)}-{int(edges[i+1]*100)}% land" for i in range(len(edges) - 1)]
+    return pd.cut(share, bins=list(edges), labels=labels, include_lowest=True)

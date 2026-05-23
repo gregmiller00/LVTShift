@@ -1482,3 +1482,150 @@ def save_standard_export(
     )
 
     return out
+
+
+
+def apply_two_tier_rollback(
+    value: Union[float, pd.Series],
+    tier1_threshold: float,
+    tier1_rate: float,
+    tier2_rate: float,
+) -> Union[float, pd.Series]:
+    """
+    Apply a two-tier assessment rollback to a property value.
+
+    The first `tier1_threshold` dollars of value are rolled back at `tier1_rate`,
+    the remainder above the threshold at `tier2_rate`. This is the shape Iowa uses
+    for commercial / industrial / railroad (2022 Iowa Acts ch 1061: first $150,000
+    at the residential rate, remainder at 90%), and the shape Minnesota uses for
+    several class-rate brackets.
+
+    Works for scalars or pandas Series. Negative inputs are clamped to 0.
+    """
+    if isinstance(value, pd.Series):
+        v = pd.to_numeric(value, errors="coerce").fillna(0.0).clip(lower=0.0)
+        tier1 = v.clip(upper=tier1_threshold) * tier1_rate
+        tier2 = (v - tier1_threshold).clip(lower=0.0) * tier2_rate
+        return tier1 + tier2
+    v = max(float(value or 0.0), 0.0)
+    tier1 = min(v, tier1_threshold) * tier1_rate
+    tier2 = max(v - tier1_threshold, 0.0) * tier2_rate
+    return tier1 + tier2
+
+
+def run_revenue_neutral_scenarios(
+    df: pd.DataFrame,
+    target_revenue: float,
+    land_value_col: str,
+    improvement_value_col: str,
+    ratios: Tuple[float, ...] = (2.0, 4.0, 8.0),
+    include_full_abatement: bool = True,
+    exclude_mask: Optional[pd.Series] = None,
+    current_tax_col: str = "current_tax",
+    exemption_col: Optional[str] = None,
+    exemption_flag_col: Optional[str] = "exemption_flag",
+    percentage_cap_col: Optional[str] = None,
+    credit_col: Optional[str] = None,
+    credit_rate_col: Optional[str] = None,
+    abatement_percentage: float = 1.0,
+    verbose: bool = False,
+) -> dict:
+    """
+    Run a suite of revenue-neutral reform scenarios with an optional class carve-out.
+
+    For each ratio in `ratios`, solves a split-rate that matches `target_revenue`.
+    If `include_full_abatement`, also solves the 100% building-abatement scenario.
+
+    The `exclude_mask` parameter is a boolean Series aligned to `df.index`. Parcels
+    where the mask is True are pulled out of the solver, the target is reduced by
+    their `current_tax_col` sum, and each scenario's result DataFrame has them
+    re-inserted with `new_tax = current_tax` (i.e., unchanged). This is how Iowa's
+    productivity-assessed ag class is handled (and any other regime that should be
+    held outside the LVT solve). When None, all parcels participate.
+
+    Returns
+    -------
+    dict
+        Keys are scenario codes ("split_2_1", "split_4_1", "split_8_1",
+        "full_abatement"). Each value is a dict with keys:
+            label, land_millage, improvement_millage, new_revenue, df.
+    """
+    if exclude_mask is not None:
+        excl_mask = exclude_mask.reindex(df.index, fill_value=False).astype(bool)
+        excl_rows = df.loc[excl_mask].copy()
+        if current_tax_col in excl_rows.columns:
+            excl_current_tax_sum = float(_coerce_numeric(excl_rows[current_tax_col]).sum())
+        else:
+            excl_current_tax_sum = 0.0
+        solve_df = df.loc[~excl_mask].copy()
+        solve_target = float(target_revenue) - excl_current_tax_sum
+    else:
+        excl_rows = None
+        excl_current_tax_sum = 0.0
+        solve_df = df
+        solve_target = float(target_revenue)
+
+    def _reinsert(df_out: pd.DataFrame) -> pd.DataFrame:
+        if excl_rows is None or len(excl_rows) == 0:
+            return df_out
+        reinserted = excl_rows.copy()
+        if current_tax_col in reinserted.columns:
+            reinserted["new_tax"] = _coerce_numeric(reinserted[current_tax_col])
+        else:
+            reinserted["new_tax"] = 0.0
+        if "tax_change" in df_out.columns and "tax_change" not in reinserted.columns:
+            reinserted["tax_change"] = 0.0
+        return pd.concat([df_out, reinserted], ignore_index=True, sort=False)
+
+    results: dict = {}
+    for ratio in ratios:
+        land_mill, imp_mill, new_rev, scen_df = model_split_rate_tax(
+            solve_df.copy(),
+            land_value_col=land_value_col,
+            improvement_value_col=improvement_value_col,
+            current_revenue=solve_target,
+            land_improvement_ratio=float(ratio),
+            exemption_col=exemption_col,
+            exemption_flag_col=exemption_flag_col,
+            percentage_cap_col=percentage_cap_col,
+            credit_col=credit_col,
+            credit_rate_col=credit_rate_col,
+            verbose=verbose,
+        )
+        scen_df = _reinsert(scen_df)
+        results[f"split_{int(ratio)}_1"] = {
+            "label": f"Split-rate {int(ratio)}:1",
+            "land_millage": land_mill,
+            "improvement_millage": imp_mill,
+            "new_revenue": new_rev + excl_current_tax_sum,
+            "df": scen_df,
+        }
+
+    if include_full_abatement:
+        # model_full_building_abatement does not accept credit_col / credit_rate_col
+        # or verbose. The other args are common with model_split_rate_tax.
+        mill, new_rev, scen_df = model_full_building_abatement(
+            solve_df.copy(),
+            land_value_col=land_value_col,
+            improvement_value_col=improvement_value_col,
+            current_revenue=solve_target,
+            abatement_percentage=float(abatement_percentage),
+            exemption_col=exemption_col,
+            exemption_flag_col=exemption_flag_col,
+            percentage_cap_col=percentage_cap_col,
+        )
+        scen_df = _reinsert(scen_df)
+        label = (
+            "Full building abatement (100%)"
+            if abs(abatement_percentage - 1.0) < 1e-9
+            else f"Building abatement ({abatement_percentage * 100:.0f}%)"
+        )
+        results["full_abatement"] = {
+            "label": label,
+            "land_millage": mill,
+            "improvement_millage": 0.0,
+            "new_revenue": new_rev + excl_current_tax_sum,
+            "df": scen_df,
+        }
+
+    return results
