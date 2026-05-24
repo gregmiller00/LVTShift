@@ -16,7 +16,7 @@ Sources:
   (2024 Assessed Valuations - Taxes Payable Sep 2025 and March 2026)
   https://www.polkcountyiowa.gov/county-auditor/property-tax/tax-rate-and-valuation-information/
 
-Output: examples/data/des_moines/des_moines_districts_<DATE>.parquet
+Output: cities/des_moines/data/des_moines_districts_<DATE>.parquet
 (matches the dated naming used by run_des_moines.py).
 
 Run once when rates change (annually) or when redistricting happens.
@@ -38,7 +38,7 @@ from shapely.geometry import shape
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = REPO_ROOT / "examples" / "data" / "des_moines"
+DATA_DIR = REPO_ROOT / "cities" / "des_moines" / "data"
 
 POLK_BASE = "https://gis4.polkcountyiowa.gov/server/rest/services/Auditor/Auditor_Export/FeatureServer"
 LAYER_SCHOOL_DISTRICTS = 75
@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=("Path to the DM parcels parquet. Defaults to the newest "
-              "des_moines_mapping_ready_*.parquet in examples/data/des_moines/."),
+              "des_moines_mapping_ready_*.parquet in cities/des_moines/data/."),
     )
     parser.add_argument(
         "--out",

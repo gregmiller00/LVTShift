@@ -1,14 +1,14 @@
-"""Build examples/des_moines.ipynb — the production LVT shift notebook for Des Moines, IA.
+"""Build cities/des_moines/model.ipynb — the production LVT shift notebook for Des Moines, IA.
 
 Run this from the LVTShift repo root whenever the notebook needs to be rebuilt:
 
     python scripts/build_des_moines_notebook.py
 
-Inputs the notebook expects at runtime:
-- examples/data/des_moines/des_moines_mapping_ready_<date>.parquet  (deposited by ETL)
-- examples/data/des_moines/des_moines_districts_<date>.parquet      (deposited by scripts/des_moines_district_overlay.py)
+Inputs the notebook expects at runtime (relative to the notebook, so cities/des_moines/):
+- data/des_moines_mapping_ready_<date>.parquet  (deposited by ETL)
+- data/des_moines_districts_<date>.parquet      (deposited by scripts/des_moines_district_overlay.py)
 
-The notebook is self-contained: imports only lvt_utils + census_utils + standard
+The notebook is self-contained: imports only the lvt/ package + standard
 PyData. No upstream dependencies.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import nbformat as nbf
 
 
 HERE = Path(__file__).resolve().parents[1]
-OUT_PATH = HERE / "examples" / "des_moines.ipynb"
+OUT_PATH = HERE / "cities" / "des_moines" / "model.ipynb"
 
 
 def md(s: str) -> nbf.NotebookNode:
@@ -70,8 +70,8 @@ Recorded per the [LVT Modeling Guide](../LVT_MODELING_GUIDE.md) §Q1.0:
 
 ## Inputs
 
-- `examples/data/des_moines/des_moines_mapping_ready_<date>.parquet` — produced by `data/jurisidictions/run_des_moines.py` (geovizwiz-sb side) and deposited into LVTShift; PROFILE_MODELING schema.
-- `examples/data/des_moines/des_moines_districts_<date>.parquet` — produced by `scripts/des_moines_district_overlay.py`. Per-parcel: school district, SSMID, urban-sanitary, TIF flag/name, Iowa DoM 6-digit tax-district code, FY26 consolidated millage.
+- `cities/des_moines/data/des_moines_mapping_ready_<date>.parquet` — produced by `data/jurisidictions/run_des_moines.py` (geovizwiz-sb side) and deposited into LVTShift; PROFILE_MODELING schema.
+- `cities/des_moines/data/des_moines_districts_<date>.parquet` — produced by `scripts/des_moines_district_overlay.py`. Per-parcel: school district, SSMID, urban-sanitary, TIF flag/name, Iowa DoM 6-digit tax-district code, FY26 consolidated millage.
 
 If the second file is missing, run:
 ```
@@ -91,19 +91,14 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
-REPO_ROOT = Path.cwd()
-if not (REPO_ROOT / "lvt_utils.py").exists():
-    REPO_ROOT = REPO_ROOT.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+# Notebook lives at cities/des_moines/model.ipynb; repo root is two up.
+sys.path.insert(0, str(Path('../..').resolve()))
+REPO_ROOT = Path('../..').resolve()
 
 # Load CENSUS_API_KEY (and anything else) from the repo-root .env.
 load_dotenv(REPO_ROOT / ".env")
 
-import lvt_utils
-import viz  # bundled visualization helpers
-import policy_analysis
-import lodes_utils
+from lvt import lvt_utils, census_utils, policy_analysis, viz, lodes_utils
 '''))
 
 # ---------------------------------------------------------------------------
@@ -168,7 +163,7 @@ def rollback_bucket(cls: object) -> str:
 # ---------------------------------------------------------------------------
 cells.append(md(r"""## 2. Load parcels + district sidecar"""))
 
-cells.append(code(r'''data_dir = REPO_ROOT / "examples" / "data" / "des_moines"
+cells.append(code(r'''data_dir = Path("data")
 
 parcel_files = sorted(data_dir.glob("des_moines_mapping_ready_*.parquet"))
 sidecar_files = sorted(data_dir.glob("des_moines_districts_*.parquet"))
@@ -631,7 +626,7 @@ if not os.getenv("CENSUS_API_KEY"):
     print("CENSUS_API_KEY not set — skipping equity overlay.")
     equity_ready = False
 else:
-    import census_utils
+    # census_utils is already imported at the top via `from lvt import ...`.
     census_data, census_boundaries = census_utils.get_census_data_with_boundaries(
         fips_code="19153",
         year=2022,
