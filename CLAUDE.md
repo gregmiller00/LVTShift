@@ -17,6 +17,32 @@ cp env.template .env
 # Add CENSUS_API_KEY (free at https://api.census.gov/data/key_signup.html)
 ```
 
+### Loading `.env` in notebooks and scripts
+
+Python does **not** auto-load `.env` files. `os.getenv("CENSUS_API_KEY")` only sees keys
+that are already in the process environment, which on Windows (and a fresh shell on
+Mac/Linux) usually means it returns an empty string even when `.env` is present.
+
+Every notebook or script that needs `CENSUS_API_KEY` (or any other secret) must call
+`load_dotenv` explicitly. The standard pattern, used by the canonical notebook
+template (`.claude/skills/build-notebook.md`):
+
+```python
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
+
+sys.path.insert(0, '../..')
+REPO_ROOT = Path('../..').resolve()
+load_dotenv(REPO_ROOT / '.env')
+```
+
+Without this, `os.getenv("CENSUS_API_KEY")` returns `""` and the Census/equity sections
+silently fall through.
+
+When adding a new script under `scripts/` that needs a secret, replicate the same
+pattern at the top of the file.
+
 ## Architecture
 
 Five core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:

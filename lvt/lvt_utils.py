@@ -500,16 +500,17 @@ def calculate_current_tax(
     
     return total_revenue, second_revenue, result_df
 
-def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
-                         current_revenue: float, land_improvement_ratio: float = 3, 
+def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_value_col: str,
+                         current_revenue: float, land_improvement_ratio: float = 3,
                          exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
                          percentage_cap_col: Optional[str] = None,
                          credit_col: Optional[str] = None,
                          credit_rate_col: Optional[str] = None,
+                         exclude_mask: Optional[pd.Series] = None,
                          verbose: bool = False) -> Tuple[float, float, float, pd.DataFrame]:
     """
     Model a split-rate property tax where land is taxed at a higher rate than improvements.
-    
+
     Parameters:
     -----------
     df : pandas.DataFrame
@@ -528,9 +529,16 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         Column name for exemption flag (1 for exempt, 0 for not exempt)
     percentage_cap_col : str, optional
         Column name for percentage cap (maximum tax as percentage of property value)
+    exclude_mask : pd.Series, optional
+        Boolean Series aligned to df.index. Parcels where True are pulled out of
+        the revenue-neutral solve, the target is reduced by their current_tax sum,
+        and they are re-inserted in the result with new_tax = current_tax
+        (i.e., unchanged). Use for productivity-assessed agricultural parcels
+        or any class that should be held outside the LVT solve. Default None
+        (all parcels participate).
     verbose : bool, optional
         Whether to print verbose information (default False)
-        
+
     Returns:
     --------
     tuple
@@ -563,7 +571,9 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         raise TypeError("credit_col must be a string or None")
     if credit_rate_col is not None and not isinstance(credit_rate_col, str):
         raise TypeError("credit_rate_col must be a string or None")
-    
+    if exclude_mask is not None and not isinstance(exclude_mask, pd.Series):
+        raise TypeError("exclude_mask must be a pandas Series or None")
+
     # Check if columns exist in the DataFrame
     for col in [land_value_col, improvement_value_col]:
         if col not in df.columns:
@@ -578,7 +588,41 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
         raise ValueError(f"Credit column '{credit_col}' not found in DataFrame")
     if credit_rate_col is not None and credit_rate_col not in df.columns:
         raise ValueError(f"Credit rate column '{credit_rate_col}' not found in DataFrame")
-    
+
+    # Handle exclude_mask: pull excluded parcels out of the solve, run the solver on
+    # the remainder with a reduced target, then re-insert excluded rows with
+    # new_tax = current_tax. Recurses with exclude_mask=None to keep the main body
+    # of the function unchanged.
+    if exclude_mask is not None:
+        excl_bool = exclude_mask.reindex(df.index, fill_value=False).astype(bool)
+        if excl_bool.any():
+            excluded = df.loc[excl_bool].copy()
+            solve_df = df.loc[~excl_bool].copy()
+            if 'current_tax' in excluded.columns:
+                excl_current_tax_sum = float(_coerce_numeric(excluded['current_tax']).sum())
+            else:
+                excl_current_tax_sum = 0.0
+            adjusted_revenue = float(current_revenue) - excl_current_tax_sum
+            land_m, imp_m, solve_rev, solve_out = model_split_rate_tax(
+                solve_df, land_value_col, improvement_value_col, adjusted_revenue,
+                land_improvement_ratio=land_improvement_ratio,
+                exemption_col=exemption_col, exemption_flag_col=exemption_flag_col,
+                percentage_cap_col=percentage_cap_col,
+                credit_col=credit_col, credit_rate_col=credit_rate_col,
+                exclude_mask=None,
+                verbose=verbose,
+            )
+            if 'current_tax' in excluded.columns:
+                excluded['new_tax'] = _coerce_numeric(excluded['current_tax'])
+                excluded['tax_change'] = 0.0
+                excluded['tax_change_pct'] = 0.0
+            else:
+                excluded['new_tax'] = 0.0
+            combined = pd.concat([solve_out, excluded], sort=False)
+            combined = combined.reindex(df.index)
+            total_rev = float(solve_rev + excl_current_tax_sum)
+            return land_m, imp_m, total_rev, combined
+
     # Make a copy to avoid modifying the original
     result_df = df.copy()
     
@@ -683,13 +727,14 @@ def model_split_rate_tax(df: pd.DataFrame, land_value_col: str, improvement_valu
     
     return land_millage, improvement_millage, new_total_revenue, result_df
 
-def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improvement_value_col: str, 
+def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improvement_value_col: str,
                                  current_revenue: float, abatement_percentage: float = 1.0,
                                  exemption_col: Optional[str] = None, exemption_flag_col: Optional[str] = None,
-                                 percentage_cap_col: Optional[str] = None) -> Tuple[float, float, pd.DataFrame]:
+                                 percentage_cap_col: Optional[str] = None,
+                                 exclude_mask: Optional[pd.Series] = None) -> Tuple[float, float, pd.DataFrame]:
     """
     Model a building abatement system where improvements are reduced by a specified percentage.
-    
+
     Parameters:
     -----------
     df : pandas.DataFrame
@@ -708,7 +753,12 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
         Column name for exemption flag (1 for exempt, 0 for not exempt)
     percentage_cap_col : str, optional
         Column name for percentage cap (maximum tax as percentage of property value)
-        
+    exclude_mask : pd.Series, optional
+        Boolean Series aligned to df.index. Parcels where True are pulled out of
+        the revenue-neutral solve, the target is reduced by their current_tax sum,
+        and they are re-inserted with new_tax = current_tax (unchanged). Default
+        None (all parcels participate).
+
     Returns:
     --------
     tuple
@@ -739,7 +789,9 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
         raise TypeError("exemption_flag_col must be a string or None")
     if percentage_cap_col is not None and not isinstance(percentage_cap_col, str):
         raise TypeError("percentage_cap_col must be a string or None")
-    
+    if exclude_mask is not None and not isinstance(exclude_mask, pd.Series):
+        raise TypeError("exclude_mask must be a pandas Series or None")
+
     # Check if columns exist in the DataFrame
     for col in [land_value_col, improvement_value_col]:
         if col not in df.columns:
@@ -750,14 +802,44 @@ def model_full_building_abatement(df: pd.DataFrame, land_value_col: str, improve
         raise ValueError(f"Exemption flag column '{exemption_flag_col}' not found in DataFrame")
     if percentage_cap_col is not None and percentage_cap_col not in df.columns:
         raise ValueError(f"Percentage cap column '{percentage_cap_col}' not found in DataFrame")
-    
+
+    # Handle exclude_mask: same pattern as model_split_rate_tax. Pull excluded
+    # parcels out, run solver on remainder, re-insert with new_tax = current_tax.
+    if exclude_mask is not None:
+        excl_bool = exclude_mask.reindex(df.index, fill_value=False).astype(bool)
+        if excl_bool.any():
+            excluded = df.loc[excl_bool].copy()
+            solve_df = df.loc[~excl_bool].copy()
+            if 'current_tax' in excluded.columns:
+                excl_current_tax_sum = float(_coerce_numeric(excluded['current_tax']).sum())
+            else:
+                excl_current_tax_sum = 0.0
+            adjusted_revenue = float(current_revenue) - excl_current_tax_sum
+            mill, solve_rev, solve_out = model_full_building_abatement(
+                solve_df, land_value_col, improvement_value_col, adjusted_revenue,
+                abatement_percentage=abatement_percentage,
+                exemption_col=exemption_col, exemption_flag_col=exemption_flag_col,
+                percentage_cap_col=percentage_cap_col,
+                exclude_mask=None,
+            )
+            if 'current_tax' in excluded.columns:
+                excluded['new_tax'] = _coerce_numeric(excluded['current_tax'])
+                excluded['tax_change'] = 0.0
+                excluded['tax_change_pct'] = 0.0
+            else:
+                excluded['new_tax'] = 0.0
+            combined = pd.concat([solve_out, excluded], sort=False)
+            combined = combined.reindex(df.index)
+            total_rev = float(solve_rev + excl_current_tax_sum)
+            return mill, total_rev, combined
+
     # Make a copy to avoid modifying the original
     result_df = df.copy()
-    
+
     # Ensure numeric values
     result_df[land_value_col] = pd.to_numeric(result_df[land_value_col], errors='coerce').fillna(0)
     result_df[improvement_value_col] = pd.to_numeric(result_df[improvement_value_col], errors='coerce').fillna(0)
-    
+
     # Apply building abatement (reduce improvement values)
     result_df['abated_improvement_value'] = result_df[improvement_value_col] * (1 - abatement_percentage)
     
@@ -1482,3 +1564,31 @@ def save_standard_export(
     )
 
     return out
+
+
+def apply_two_tier_rollback(
+    value: Union[float, pd.Series],
+    tier1_threshold: float,
+    tier1_rate: float,
+    tier2_rate: float,
+) -> Union[float, pd.Series]:
+    """
+    Apply a two-tier assessment rollback to a property value.
+
+    The first `tier1_threshold` dollars of value are rolled back at `tier1_rate`,
+    the remainder above the threshold at `tier2_rate`. This is the shape Iowa uses
+    for commercial / industrial / railroad (2022 Iowa Acts ch 1061: first $150,000
+    at the residential rate, remainder at 90%), and the shape Minnesota uses for
+    several class-rate brackets.
+
+    Works for scalars or pandas Series. Negative inputs are clamped to 0.
+    """
+    if isinstance(value, pd.Series):
+        v = pd.to_numeric(value, errors="coerce").fillna(0.0).clip(lower=0.0)
+        tier1 = v.clip(upper=tier1_threshold) * tier1_rate
+        tier2 = (v - tier1_threshold).clip(lower=0.0) * tier2_rate
+        return tier1 + tier2
+    v = max(float(value or 0.0), 0.0)
+    tier1 = min(v, tier1_threshold) * tier1_rate
+    tier2 = max(v - tier1_threshold, 0.0) * tier2_rate
+    return tier1 + tier2
