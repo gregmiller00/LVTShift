@@ -13,18 +13,30 @@ import numpy as np
 # Load environment variables from .env file
 load_dotenv()
 
-def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd.DataFrame:
+def get_census_data(
+    fips_code: str,
+    year: int = 2022,
+    api_key: str = None,
+    extra_variables: Optional[List[str]] = None,
+    column_aliases: Optional[Dict[str, str]] = None,
+) -> pd.DataFrame:
     """
     Get Census demographic data for block groups in a given FIPS code.
-    
+
     Args:
         fips_code (str): 5-digit FIPS code (state + county)
         year (int): Census year to query (default: 2022)
         api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
-    
+        extra_variables (list of str, optional): Additional ACS variable codes to fetch
+            (e.g. ["B25077_001E", "B25064_001E"]). They appear as columns in the returned
+            DataFrame alongside the fixed default set. Negative values are coerced to NaN.
+        column_aliases (dict, optional): Rename map applied after fetch, e.g.
+            {"B25077_001E": "median_home_value"}. Only applies to extras — the default
+            columns (median_income, total_pop, etc.) are not affected.
+
     Returns:
         pd.DataFrame: DataFrame containing Census demographic data
-        
+
     Raises:
         TypeError: If fips_code is not a string or year is not an int
         ValueError: If fips_code is not 5 digits or api_key is not provided
@@ -35,7 +47,7 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
         raise TypeError("year must be an integer")
     if len(fips_code) != 5:
         raise ValueError("fips_code must be 5 digits (state + county)")
-    
+
     # Try to get API key from environment variable if not provided
     if not api_key:
         api_key = os.getenv('CENSUS_API_KEY')
@@ -44,23 +56,29 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
 
     # Initialize Census API
     c = Census(api_key)
-    
+
     # Split FIPS code into state and county
     state_fips = fips_code[:2]
     county_fips = fips_code[2:]
-    
-    # Get block group data
+
+    default_fields = [
+        'NAME',
+        'B19013_001E',  # Median income
+        'B01003_001E',  # Total population
+        'B03002_003E',  # White alone
+        'B03002_004E',  # Black alone
+        'B03002_012E',  # Hispanic/Latino
+    ]
+    extras = list(extra_variables) if extra_variables else []
+    # Dedupe while preserving order
+    fields = list(dict.fromkeys(default_fields + extras))
+
     data = c.acs5.state_county_blockgroup(
-        fields=['NAME',
-                'B19013_001E',  # Median income
-                'B01003_001E',  # Total population
-                'B03002_003E',  # White alone
-                'B03002_004E',  # Black alone
-                'B03002_012E'],  # Hispanic/Latino
+        fields=fields,
         state_fips=state_fips,
         county_fips=county_fips,
-        blockgroup='*',  # All block groups
-        year=year
+        blockgroup='*',
+        year=year,
     )
 
     # Convert to DataFrame
@@ -86,13 +104,20 @@ def get_census_data(fips_code: str, year: int = 2022, api_key: str = None) -> pd
     df['std_geoid'] = df['state_fips'] + df['county_fips'] + df['tract_fips'] + df['bg_fips']
 
     # Census API returns all values as strings — coerce to numeric
-    for col in ['median_income', 'total_pop', 'white_pop', 'black_pop', 'hispanic_pop']:
+    numeric_cols = ['median_income', 'total_pop', 'white_pop', 'black_pop', 'hispanic_pop'] + extras
+    for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+            # Census uses negative sentinels for missing/suppressed values
+            df.loc[df[col] < 0, col] = np.nan
 
     # Calculate minority and black percentages
     df['minority_pct'] = ((df['total_pop'] - df['white_pop']) / df['total_pop'] * 100).round(2)
     df['black_pct'] = (df['black_pop'] / df['total_pop'] * 100).round(2)
+
+    # Apply any user-supplied aliases for the extras
+    if column_aliases:
+        df = df.rename(columns=column_aliases)
 
     return df
 
@@ -360,28 +385,38 @@ def match_to_census_blockgroups(
 def get_census_data_with_boundaries(
     fips_code: str,
     year: int = 2022,
-    api_key: str = None
+    api_key: str = None,
+    extra_variables: Optional[List[str]] = None,
+    column_aliases: Optional[Dict[str, str]] = None,
 ) -> Tuple[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Get both Census demographic data and boundary files for block groups in a FIPS code.
-    
+
     Args:
         fips_code (str): 5-digit FIPS code (state + county)
         year (int): Census year to query (default: 2022)
         api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
-    
+        extra_variables (list of str, optional): Additional ACS variable codes to fetch
+            (e.g. ["B25077_001E"] for median home value). Passed through to get_census_data.
+        column_aliases (dict, optional): Rename map applied to the extras (e.g.
+            {"B25077_001E": "median_home_value"}). Passed through to get_census_data.
+
     Returns:
-        Tuple[pd.DataFrame, gpd.GeoDataFrame]: 
+        Tuple[pd.DataFrame, gpd.GeoDataFrame]:
             - Census demographic data DataFrame
             - Census Block Group boundaries GeoDataFrame
-            
+
     Raises:
         TypeError: If inputs have wrong types
         ValueError: If inputs have invalid values
         requests.RequestException: If API requests fail
     """
     # Get demographic data
-    census_data = get_census_data(fips_code, year, api_key)
+    census_data = get_census_data(
+        fips_code, year, api_key,
+        extra_variables=extra_variables,
+        column_aliases=column_aliases,
+    )
     
     # Get boundary files
     census_boundaries = get_census_blockgroups_shapefile(fips_code)
@@ -755,8 +790,23 @@ def create_demographic_summary(
         summary['total_current_tax']
     ) * 100
     summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
-    
+
     # Reset index
     summary = summary.reset_index()
-    
+
     return summary
+
+
+def normalize_acs_geoid(series: pd.Series) -> pd.Series:
+    """
+    Convert ACS API `GEO_ID` (e.g. "1500000US191530101001") to 12-char block-group key.
+
+    The Census ACS API returns a 20-character GEO_ID with a 7-character prefix
+    ("1500000US" for block groups); TIGER block-group shapefiles use the bare
+    12-character SSSCCCTTTTTTB key. This helper strips the prefix safely whether
+    the prefix is present or not.
+
+    Returns a string Series. NaN inputs become "".
+    """
+    s = series.fillna("").astype(str)
+    return s.str.replace(r"^[0-9A-Z]+US", "", regex=True).str[-12:]

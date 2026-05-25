@@ -1398,3 +1398,289 @@ def create_city_report(
         'model_type': model_t,
         'charts_saved': charts_saved,
     }
+
+
+def quintile_progressivity_chart(
+    df: pd.DataFrame,
+    quintile_col: str,
+    value_cols: List[Tuple[str, str, str]],
+    title: str,
+    quintile_labels: Optional[List[str]] = None,
+    n_quintiles: int = 5,
+    flip_sign_for: Optional[List[str]] = None,
+    figsize: Tuple[float, float] = (12, 5),
+    drop_duplicates_label: bool = True,
+    ax: Optional[plt.Axes] = None,
+) -> pd.DataFrame:
+    """
+    Multi-column quintile progressivity bar chart for tax-shift analysis.
+
+    Buckets parcels into n quintiles by `quintile_col`, computes the median of
+    each `value_col` per quintile, and plots them as grouped bars. Use for any
+    progressivity dimension (income, wealth, renter share) when comparing
+    multiple per-parcel dollar columns side by side.
+
+    Distinct from `create_quintile_summary` / `plot_quintile_analysis`, which
+    operate on a single tax_change column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Parcel-level data already filtered to the population of interest.
+    quintile_col : str
+        Column used to define quintiles. NaN and non-positive values are dropped.
+    value_cols : list of (column_name, label, color)
+        Each tuple defines one bar group. The column is the per-parcel dollar
+        amount; the label appears in the legend; the color is a matplotlib
+        color spec. Median is taken across each quintile.
+    title : str
+        Plot title.
+    quintile_labels : list of str, optional
+        Display labels. Defaults to "Q1 (lowest)"..."Q5 (highest)".
+    n_quintiles : int, default 5
+        Number of quantile buckets.
+    flip_sign_for : list of str, optional
+        Column names whose values should be plotted as negative (savings/received).
+    figsize : tuple, default (12, 5)
+        Figure size when creating a new axes.
+    drop_duplicates_label : bool, default True
+        Use `pd.qcut(..., duplicates="drop")` so the chart still renders when
+        the underlying distribution has many tied values.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to draw into.
+
+    Returns
+    -------
+    pd.DataFrame
+        Median-per-quintile summary table.
+    """
+    if quintile_labels is None:
+        if n_quintiles == 5:
+            quintile_labels = ["Q1 (lowest)", "Q2", "Q3", "Q4", "Q5 (highest)"]
+        elif n_quintiles == 4:
+            quintile_labels = ["Q1 (lowest)", "Q2", "Q3", "Q4 (highest)"]
+        else:
+            quintile_labels = [f"Q{i+1}" for i in range(n_quintiles)]
+
+    data = df.loc[df[quintile_col].notna() & (df[quintile_col] > 0)].copy()
+    qcut_kwargs = {"q": n_quintiles, "labels": quintile_labels}
+    if drop_duplicates_label:
+        qcut_kwargs["duplicates"] = "drop"
+    data["_q"] = pd.qcut(data[quintile_col], **qcut_kwargs)
+    agg = {col: (col, "median") for col, _, _ in value_cols}
+    summary = data.groupby("_q", observed=True).agg(**agg)
+
+    if flip_sign_for is None:
+        flip_sign_for = []
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    n_bars = len(value_cols)
+    width = 0.8 / max(n_bars, 1)
+    x = np.arange(len(summary))
+    centered_offsets = np.linspace(-(n_bars - 1) / 2.0, (n_bars - 1) / 2.0, n_bars) * width
+    for offset, (col, label, color) in zip(centered_offsets, value_cols):
+        vals = summary[col].astype(float)
+        if col in flip_sign_for:
+            vals = -vals
+        ax.bar(x + offset, vals, width, label=label, color=color)
+    ax.axhline(0, color="black", linewidth=0.6)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(lbl) for lbl in summary.index], rotation=20)
+    ax.set_ylabel("Median per-parcel $ change")
+    ax.set_title(title)
+    ax.legend(loc="best", fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    return summary
+
+
+def winners_losers_within_category_chart(
+    df: pd.DataFrame,
+    category_col: str,
+    change_pct_col: str,
+    title: str,
+    threshold_pct: float = 10.0,
+    min_count: int = 50,
+    sort_by: str = "losers",
+    figsize: Tuple[float, Optional[float]] = (11, None),
+    ax: Optional[plt.Axes] = None,
+    winners_color: str = "#4d8ec4",
+    losers_color: str = "#c44d4d",
+    neutral_color: str = "#cccccc",
+) -> pd.DataFrame:
+    """
+    100%-stacked horizontal-bar chart of winners / neutral / losers within
+    each category. Operates on raw parcel-level data and computes the
+    per-category shares internally.
+
+    Distinct from `create_threshold_change_chart`, which expects a
+    pre-aggregated summary with `pct_increase_gt_threshold` /
+    `pct_decrease_gt_threshold` columns and renders a split-from-zero bar
+    rather than a 100%-stacked bar.
+
+    For each `category_col`, computes the share of parcels with `change_pct_col`
+    below `-threshold_pct` (winners), above `+threshold_pct` (losers), and
+    within the band.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Parcel-level data.
+    category_col : str
+        Categorical column (e.g. chart_category) used as the y-axis.
+    change_pct_col : str
+        Per-parcel percentage change column.
+    title : str
+        Plot title.
+    threshold_pct : float, default 10.0
+        Width of the neutral band (in percent).
+    min_count : int, default 50
+        Skip categories with fewer than this many parcels.
+    sort_by : {"losers", "winners", "alpha"}, default "losers"
+        Y-axis ordering.
+    figsize : tuple, default (11, None)
+        Width and height. When height is None, auto-scales with category count.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes to draw into.
+    winners_color, losers_color, neutral_color : str
+        Matplotlib color specs for the three bands.
+
+    Returns
+    -------
+    pd.DataFrame
+        Per-category summary with columns: n, pct_winners, pct_within, pct_losers.
+    """
+    pct = pd.to_numeric(df[change_pct_col], errors="coerce")
+    summary = (
+        df.assign(_pct=pct)
+          .dropna(subset=["_pct"])
+          .groupby(category_col, observed=True)
+          .agg(
+              n=(category_col, "size"),
+              pct_winners=("_pct", lambda s: float((s < -threshold_pct).mean() * 100.0)),
+              pct_losers=("_pct", lambda s: float((s > threshold_pct).mean() * 100.0)),
+          )
+    )
+    summary["pct_within"] = 100.0 - summary["pct_winners"] - summary["pct_losers"]
+    summary = summary[summary["n"] >= min_count].copy()
+
+    if sort_by == "losers":
+        summary = summary.sort_values("pct_losers", ascending=True)
+    elif sort_by == "winners":
+        summary = summary.sort_values("pct_winners", ascending=False)
+    elif sort_by == "alpha":
+        summary = summary.sort_index()
+
+    if ax is None:
+        height = figsize[1] if figsize[1] is not None else max(4.5, len(summary) * 0.55)
+        fig, ax = plt.subplots(figsize=(figsize[0], height))
+
+    y = np.arange(len(summary))
+    ax.barh(y, summary["pct_winners"], color=winners_color,
+            label=f"Savings >{threshold_pct:.0f}% of baseline")
+    ax.barh(y, summary["pct_within"], left=summary["pct_winners"],
+            color=neutral_color, label=f"Within +/-{threshold_pct:.0f}%")
+    ax.barh(y, summary["pct_losers"],
+            left=summary["pct_winners"] + summary["pct_within"],
+            color=losers_color, label=f"Increase >{threshold_pct:.0f}% of baseline")
+    ax.set_yticks(y)
+    ax.set_yticklabels(summary.index.astype(str))
+    ax.set_xlabel("Share of parcels (%)")
+    ax.set_xlim(0, 100)
+    ax.set_title(title)
+    ax.legend(loc="lower right")
+    ax.grid(axis="x", alpha=0.3)
+    plt.tight_layout()
+    return summary.reset_index()
+
+
+def median_change_by_category_chart(
+    summary_df: pd.DataFrame,
+    category_col: str,
+    value_col: str,
+    title: str,
+    min_count: int = 50,
+    count_col: str = "property_count",
+    figsize: Tuple[float, Optional[float]] = (11, None),
+    ax: Optional[plt.Axes] = None,
+    positive_color: str = "#c44d4d",
+    negative_color: str = "#4d8ec4",
+    label_fmt: str = "${:,.0f}",
+    xlabel: Optional[str] = None,
+    sort_ascending: bool = True,
+) -> pd.DataFrame:
+    """
+    Horizontal-bar chart of a median per-category change, with red/blue
+    coloring by sign. More configurable than
+    `create_property_category_chart`: caller supplies `value_col` / `count_col`
+    rather than hardcoded `mean_tax_change` / `property_count`.
+
+    Designed to accept the kind of summary table produced by
+    `calculate_category_tax_summary` or a groupby+median on a per-parcel df.
+    Caller passes the already-aggregated table; this function only draws.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Aggregated table; must contain `category_col` and `value_col`.
+    category_col : str
+        Y-axis category column.
+    value_col : str
+        Numeric column to draw as bar length (e.g. median_tax_change).
+    title : str
+        Plot title.
+    min_count : int, default 50
+        Drop rows with `count_col` below this. If `count_col` is missing the
+        filter is skipped.
+    count_col : str, default "property_count"
+        Column used by `min_count`.
+    figsize, ax : passed through to matplotlib.
+    positive_color, negative_color : str
+        Matplotlib colors used for bars by sign of value.
+    label_fmt : str
+        Format string applied to value annotations (default "${:,.0f}").
+    xlabel : str, optional
+        X-axis label. If None, defaults to f"Median {value_col}".
+    sort_ascending : bool, default True
+        If True, smallest (most-negative) bars on top.
+
+    Returns
+    -------
+    pd.DataFrame
+        The filtered + sorted table actually rendered.
+    """
+    data = summary_df.copy()
+    if count_col in data.columns:
+        data = data.loc[data[count_col] >= min_count]
+    data = data.sort_values(value_col, ascending=sort_ascending)
+    if ax is None:
+        height = figsize[1] if figsize[1] is not None else max(4.5, len(data) * 0.55)
+        fig, ax = plt.subplots(figsize=(figsize[0], height))
+
+    y = np.arange(len(data))
+    vals = data[value_col].astype(float)
+    colors = [positive_color if v > 0 else negative_color for v in vals]
+    ax.barh(y, vals, color=colors, alpha=0.92)
+    ax.axvline(0, color="black", linewidth=0.6, linestyle="dotted")
+    ax.set_yticks(y)
+    ax.set_yticklabels(data[category_col].astype(str))
+    ax.set_xlabel(xlabel if xlabel is not None else f"Median {value_col}")
+    ax.set_title(title)
+
+    if len(vals) > 0:
+        abs_max = float(np.abs(vals).max())
+        if abs_max == 0:
+            abs_max = 1.0
+        for idx, val in enumerate(vals):
+            ax.text(
+                val + (abs_max * 0.015 * (1 if val >= 0 else -1)),
+                idx,
+                label_fmt.format(val),
+                va="center",
+                ha="left" if val >= 0 else "right",
+                fontsize=9,
+            )
+    ax.grid(axis="x", alpha=0.3)
+    plt.tight_layout()
+    return data
