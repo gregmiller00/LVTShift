@@ -23,7 +23,7 @@ Say to your agent:
 
 > **"Add [city] to LVTShift"** or **"Model LVT for [city]"**
 
-The agent reads `.claude/skills/model-city/SKILL.md` (or you can invoke `/model-city`) and runs the full pipeline:
+The agent reads `.claude/skills/model-city/SKILL.md` (or you can invoke `/lvt-city`) and runs the full pipeline:
 
 1. Asks five policy questions (levy scope, reform type, exemptions, county/state, official revenue figure)
 2. Finds the county ArcGIS endpoint and downloads parcel data
@@ -52,7 +52,7 @@ Skills live in `.claude/skills/`. Each is a reference card the agent reads durin
 
 | Skill | Step | What it covers |
 |---|---|---|
-| `model-city/SKILL.md` | Master | Policy questions, 7-step pipeline, canonical closing pattern (also `/model-city`) |
+| `model-city/SKILL.md` | Master | Policy questions, 7-step pipeline, canonical closing pattern (also `/lvt-city`) |
 | `discover-data.md` | Step 1 | Finding ArcGIS endpoints, pagination, city filtering, column mapping |
 | `model-policy.md` | Step 2 | Assessment ratios, millage derivation, exemptions, all 6 real modeling patterns |
 | `build-notebook.md` | Step 3 | 7-section notebook template, kernelspec, census+export closing cells |

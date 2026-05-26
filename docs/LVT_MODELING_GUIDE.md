@@ -1,6 +1,6 @@
 # LVT Modeling Guide
 
-To add a new city, invoke the **model-city** skill — type `/model-city`, `model LVT for [city]`, or `add [city] to LVTShift`. It runs the full pipeline end-to-end and calls the sub-skills below in order.
+To add a new city, invoke the **model-city** skill — type `/lvt-city`, `model LVT for [city]`, or `add [city] to LVTShift`. It runs the full pipeline end-to-end and calls the sub-skills below in order.
 
 ---
 

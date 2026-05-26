@@ -164,3 +164,6 @@ Thumbs.db
 *_with_capture.ipynb
 *_executed.ipynb
 cities/seattle/model.ipynb
+
+# Claude Code agent worktrees (transient agent state, never commit)
+.claude/worktrees/
