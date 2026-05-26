@@ -167,3 +167,6 @@ cities/seattle/model.ipynb
 
 # Claude Code agent worktrees (transient agent state, never commit)
 .claude/worktrees/
+
+# Legality-analyzer briefs (kept local-only)
+analysis/legal/
