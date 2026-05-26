@@ -170,3 +170,6 @@ cities/seattle/model.ipynb
 
 # Legality-analyzer briefs (kept local-only)
 analysis/legal/
+
+# Model methodology explainers (kept local-only)
+analysis/explainers/
