@@ -1,6 +1,6 @@
 # Skill: Validate
 
-Sub-skill called from `add-city.md` Step 5.
+Sub-skill called from `model-city/SKILL.md` Step 5.
 
 Run these checks after executing the notebook. A city passes when all four gates are green.
 

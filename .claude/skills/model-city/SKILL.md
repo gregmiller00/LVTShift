@@ -1,6 +1,11 @@
-# Skill: Add a New City
+---
+name: model-city
+description: Runs the full LVTShift pipeline end-to-end to model Land Value Tax for a new U.S. city or county. Use when the user says "model LVT for [city]", "add [city] to LVTShift", "model a city", "build the model for [city]", or otherwise asks to set up a city's LVT analysis from scratch. Master skill that orchestrates discover-data → model-policy → build-notebook → validate, then runs the canonical census join + standard export + 7-PNG report. Read .claude/skills/discover-data.md, model-policy.md, build-notebook.md, and validate.md as sub-skills.
+---
 
-Invoked when the user says **"add [city] to LVTShift"** or **"model LVT for [city]"**.
+# Skill: Model a City
+
+Invoked when the user says **"model LVT for [city]"**, **"model [city]"**, or **"add [city] to LVTShift"**.
 
 This is the master skill. It runs the full pipeline end-to-end. Each numbered step maps to a sub-skill — read those for detail. Do not skip steps or reorder them.
 

@@ -1,3 +1,8 @@
+---
+name: legality-analyzer
+description: Analyzes the legal pathway for Land Value Tax (LVT) reform in a specific U.S. city or state. Use when the user asks "is LVT legal in [city/state]", "analyze LVT legality for [X]", "what's the legal pathway for split-rate in [city]", "can [city] implement LVT / a building exemption", "write a legal brief for [city]", or "research the legal pathway for [state]". Produces a citation-heavy legal brief grounded in primary sources (constitution, statute, case law) following the eight-vehicle / eight-tier framework in docs/LVT_LEGAL_DECISIONING_GUIDE.md.
+---
+
 # Skill: LVT Legality Analyzer
 
 Invoked when the user asks any version of:

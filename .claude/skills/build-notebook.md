@@ -1,6 +1,6 @@
 # Skill: Build the Notebook
 
-Sub-skill called from `add-city.md` Step 3.
+Sub-skill called from `model-city/SKILL.md` Step 3.
 
 This skill defines the canonical 7-section notebook template. Follow it exactly. Do not add sections, do not reorder sections, do not skip the closing pattern.
 

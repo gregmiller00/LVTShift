@@ -1,6 +1,6 @@
 # Skill: Discover Data
 
-Sub-skill called from `add-city.md` Step 1.
+Sub-skill called from `model-city/SKILL.md` Step 1.
 
 This skill covers finding the county ArcGIS endpoint, inspecting its schema, downloading parcel data, filtering to the city, and validating the result.
 

@@ -1,6 +1,6 @@
 # LVT Modeling Guide
 
-To add a new city, invoke the **add-city** skill (type `add [city] to LVTShift`). It runs the full pipeline end-to-end and calls the sub-skills below in order.
+To add a new city, invoke the **model-city** skill — type `/model-city`, `model LVT for [city]`, or `add [city] to LVTShift`. It runs the full pipeline end-to-end and calls the sub-skills below in order.
 
 ---
 
@@ -10,7 +10,7 @@ The pipeline has one master orchestrator and four sub-skills:
 
 | Skill | File | What it does |
 |---|---|---|
-| **Add City** (master) | `.claude/skills/add-city.md` | Policy questions → full 7-step pipeline |
+| **Model City** (master) | `.claude/skills/model-city/SKILL.md` | Policy questions → full 7-step pipeline |
 | **Discover Data** | `.claude/skills/discover-data.md` | Find ArcGIS endpoint, download, filter, validate |
 | **Model Policy** | `.claude/skills/model-policy.md` | Assessment ratios, millage sources, exemptions, split-rate or abatement |
 | **Build Notebook** | `.claude/skills/build-notebook.md` | Canonical 7-section template with exact closing pattern |

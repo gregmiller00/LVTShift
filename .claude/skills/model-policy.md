@@ -1,6 +1,6 @@
 # Skill: Model the Policy
 
-Sub-skill called from `add-city.md` Step 2.
+Sub-skill called from `model-city/SKILL.md` Step 2.
 
 This skill covers everything from understanding the current tax system to implementing `current_tax` and the split-rate or abatement model. Read all sections before writing any code.
 
