@@ -107,6 +107,12 @@ Two modeling approaches used in St. Paul:
 
 Philadelphia parcel data comes from the **OPA (Office of Property Assessment)** via Carto, not ArcGIS FeatureServer. Use `requests` + Carto SQL API directly — `get_feature_data_with_geometry` will not work here.
 
+**OPA has two parcel identifier fields** — do not confuse them:
+- `parcel_number` — 9-digit OPA account number (zero-padded), e.g. `011000017`. Join assessments on this.
+- `pin` — 10-digit DOR format, e.g. `1001197382`. Matches the `PIN` column in the Philadelphia DOR Parcels GeoJSON (`Philadelphia_DOR_Parcels_2023.geojson`). Use for lot area joins. The DOR `.shp` shapefile has `TENCODE` which does NOT match either OPA field.
+
+Always pull both in the OPA query: `SELECT parcel_number, pin, category_code, total_area, the_geom FROM opa_properties_public`
+
 **Data sources:**
 - OPA properties (current): `https://phl.carto.com/api/v2/sql?q=SELECT ... FROM opa_properties_public&format=csv` — geometry is WKB in `the_geom` column, parse with `gpd.GeoSeries.from_wkb()`
 - Assessment history: `https://phl.carto.com/api/v2/sql?q=SELECT ... FROM assessments WHERE year=XXXX&format=csv` — use this for billing-year taxable values
@@ -121,6 +127,13 @@ Philadelphia parcel data comes from the **OPA (Office of Property Assessment)** 
 
 **OPA land/building split:** ~45% of improved parcels have a land ratio of exactly 0.200 (OPA's default formula). Multi-family and commercial are especially affected. This attenuates split-rate impact. Document this limitation in the notebook.
 
+**Lot area — use a three-source priority chain:**
+1. OPA `total_area` (from `opa_properties_public`) — direct, one-to-one, no spatial artifact. Zero for ~32K parcels (condos, accessory structures).
+2. PIN-keyed DOR polygon area — `parcel_areas_by_pin.parquet` (join via OPA's `pin` field to DOR GeoJSON's `PIN`). Only useful if the parquet has been built from `Philadelphia_DOR_Parcels_2023.geojson`.
+3. DOR spatial join — `parcel_areas_dor.parquet` — prone to shared-campus-polygon artifact for parcels that lack individual DOR boundaries (esp. OPA code 8). Use `.drop_duplicates()` before `.set_index()` when building a lookup map from this file.
+
+Use `.map()` not `.merge()` when applying these lookups to avoid fan-out from duplicate identifiers.
+
 **Philadelphia category classification uses four stacked overrides** (in order):
 1. `taxable_building <= 0` → "Vacant Land" (catch-all for zero-improvement parcels)
 2. Non-vacant OPA code AND `taxable_building <= 0` AND `taxable_land > 0` → "Abated / Construction Exemption" (active 10-year construction abatement)
@@ -129,11 +142,19 @@ Philadelphia parcel data comes from the **OPA (Office of Property Assessment)** 
 
 Always apply these in this order. Override 3 before Override 4 matters: the full-exempt check must come after the improved-vacant reclassification or some parcels can end up in the wrong bucket.
 
-**Abated parcels: impute building value for the reform scenario.** Parcels with `taxable_building = 0` and active abatements have LR=1.0 in the split-rate base, producing an artificially large result. Fix: set `model_building = 4 × taxable_land` (restoring OPA's implicit 20% land ratio) for the reform calculation only. Keep `current_tax` as actual (land-only). Add $12.5B to the reform improvement base; both millages decrease ~5%. The "Abated / Construction Exemption" category shows +315.5%, representing the shift from an almost-free land-only bill to a full LVT bill on the estimated complete value.
+**Abated parcels: use `exempt_building` for the reform scenario.** Parcels with `taxable_building = 0` have their building value in `exempt_building` — OPA still assesses the building, it just moves to the exempt column. Use `model_building = exempt_building` (available for ~93% of abated parcels); fall back to `market_value - taxable_land` for the ~7% where `exempt_building` is also zero (mid-construction). **Do not use `4 × taxable_land`** — that overstates by ~58% at the median.
 
 **Fully exempt SFR parcels are low-value homesteaders, not vacant lots.** ~27K SFR parcels with `market_value <= $80K` have their entire assessed value wiped out by the Homestead Exemption. They show up as `full_exmp=1` and end up in "Vacant Land" if not reclassified. Override 4 moves them to "Single Family Residential — Exempt."
 
 **Kernel name:** On Windows, the `cle-venv-new` kernel may not be registered. Check `jupyter kernelspec list` and use the available kernel (e.g., `python3`) for `nbconvert --execute`.
+
+**Philadelphia LYCD model** (`cities/philadelphia/model_lycd.ipynb`) uses GMA hierarchical LYCD land values instead of OPA's taxable_land. Algorithm: OPA 2024 `market_value / lot_area_sqft` zone median × 20% × parcel lot area; 100% for vacant (OPA codes 6/12/13). Uses OPA's 613-zone L3 GMA hierarchy (fallback to L2/L1 for sparse zones). Applies improved-only `market_value` cap: `lycd_land = min(lycd_land, market_value)` for non-vacant parcels — prevents spatial-join lot-area artifacts from inflating results; vacant parcels are exempt from the cap so their development-potential signal survives.
+
+### viz.py — create_city_report path issue
+
+`create_city_report(df, city, output_dir='../../analysis/reports')` uses a **relative path**. It must be called from `cities/<city>/` or the figures write to the wrong location. When running standalone regen scripts, either `os.chdir` to `cities/<city>/` first, or pass an absolute `output_dir`. Symptom: figures appear fresh but show stale data.
+
+Also: delete `lvt/__pycache__/` before regenerating if you've just edited `lvt/viz.py` — Python may use the old bytecode.
 
 ## Notebooks
 
