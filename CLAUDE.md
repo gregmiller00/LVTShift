@@ -164,4 +164,37 @@ Data stored locally in `cities/<city>/data/` as geoparquet files (gitignored).
 
 ## Data Files
 
-All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each example city stores scraped data locally in `examples/data/<city>/`. The `data_scrape` flag in notebooks controls whether to fetch fresh data or load from cached files.
+All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each city stores scraped data locally in `cities/<city>/data/`. The `data_scrape` flag in notebooks controls whether to fetch fresh data or load from cached files.
+
+## Batch Execution
+
+`scripts/run_all_cities.py` runs all city notebooks via `nbconvert`. It:
+- Auto-detects missing data caches and patches `data_scrape = 0 → 1` (handles both `data_scrape` and `scrape_data` variable names)
+- Executes to a throw-away `_executed.ipynb`, leaving the source notebook untouched
+- Reports pass/fail and CSV row counts
+
+`scripts/patch_notebooks.py` applies idempotent fixes to notebook cells — safe to re-run. Add new patches as functions there rather than editing notebooks manually.
+
+## Ratio Harmonization
+
+All runnable city notebooks are set to 4:1 split-rate. The canonical variable names are:
+- `LAND_IMPROVEMENT_RATIO = 4.0` (most cities)
+- `MODEL_TYPE = 'split_rate:4.0'` (canonical string — use colon format, not underscore)
+
+## Known Blocked Cities
+
+**Cincinnati** — The original `CAGIS_Open_Data` ArcGIS service (layer 12) returns 400 errors. The nearest replacement (`Cincinnati_Parcels_Indicators_2025/127`) is missing `MKTLND` (land value), which is required for LVT modeling. Notebook has auto-scrape fallback code but will fail until a new source with parcel-level land values is found.
+
+**Spokane** — After scraping parcel geometry, the notebook requires `charge_info_1.xlsx` and `charge_info_2.xlsx` — per-parcel levy charge tables manually downloaded from Spokane County. No download URL exists in the codebase. Obtain from: https://gisdatacatalog-spokanecounty.opendata.arcgis.com/pages/parcel-data-file-downloads
+
+**Denver** — Depends on manually-assembled `data/1-assemble-universe.parquet` and `data/_just_city_county_millage_2024.csv` (never committed, created by Lars Doucet locally). Notebook also has syntax errors (mismatched quotes) and non-standard property categories. Needs a full rebuild from public data sources.
+
+## Fort Collins Notes
+
+The `build_fort_collins_propinfo_cache.py` script (fetches per-parcel state tax relief from the Larimer County Treasurer API) was never committed. The notebook now defaults to `owner_tax_share = 1.0` when the script/cache is absent, which slightly overstates current tax for parcels receiving state relief but does not affect LVT % change calculations.
+
+The Larimer County GIS parcel shapefile (`GIS_ParcelOwnerSHP.zip`) contains date fields (`DEEDDATE`, `SALEDATE`, `UPDATEDATE`) with year=0 values that Fiona cannot parse. Fix: `gpd.read_file(url, ignore_fields=['DEEDDATE', 'SALEDATE', 'UPDATEDATE'])`.
+
+## Notebook Data-Scrape Variable Names
+
+Some notebooks use `scrape_data = 0` (Bellingham, Spokane) instead of `data_scrape = 0`. The batch runner patches both. When writing new notebooks, prefer `data_scrape` for consistency.

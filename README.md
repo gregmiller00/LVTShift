@@ -80,9 +80,15 @@ cities/              One notebook per city
   ...
 
 analysis/
-  data/              Standard exported CSVs (one per city)
-  reports/           PNG charts (one folder per city)
-  cross_city.ipynb   Cross-city equity comparison
+  data/                  Standard exported CSVs (one per city)
+  reports/               PNG charts (one folder per city)
+  figures/cross_city/    Cross-city summary figures (4 PNGs + CSV table)
+  cross_city.ipynb       Cross-city equity comparison (interactive)
+  cross_city_figures.py  Script to regenerate cross-city figures
+
+scripts/
+  run_all_cities.py      Batch notebook runner (patches scrape flags, reports pass/fail)
+  patch_notebooks.py     Idempotent patches for ratio harmonization and bug fixes
 
 docs/
   LVT_MODELING_GUIDE.md   Full modeling reference
@@ -185,21 +191,30 @@ Census charts are generated when block-group income and minority data are availa
 
 ## Cities Modeled
 
-| City | State | Model | Key Notes |
-|---|---|---|---|
-| St. Paul | MN | Split-rate 4:1 (Tax Capacity) | Full city tax bill; condo collapse by PlatID |
-| Spokane | WA | Building abatement 75% | 8 levies modeled independently |
-| South Bend | IN | Split-rate 4:1 | St. Joseph County ArcGIS |
-| Baltimore | MD | Split-rate | Already split-rate; models deeper shift |
-| Rochester | NY | Split-rate 10:1 | Homestead/non-homestead dual millage |
-| Bellingham | WA | Split-rate 4:1 | Whatcom County |
-| Cincinnati | OH | Split-rate 4:1 | 35% Ohio assessment ratio |
-| Fort Collins | CO | Split-rate 4:1 | Larimer County |
-| Morgantown | WV | Split-rate 4:1 | Monongalia County |
-| Scranton | PA | Split-rate 4:1 | Lackawanna County |
-| Syracuse | NY | Split-rate 4:1 | Onondaga County |
-| Charlottesville | VA | Split-rate 4:1 | Albemarle County GIS |
-| Philadelphia | PA | Split-rate 4:1 | OPA via Carto; combined city+school levy; 2024 assessment vintage |
+All runnable cities use a harmonized **4:1 split-rate** scenario (land taxed at 4× the improvement rate, revenue-neutral).
+
+| City | State | Parcels | Status | Key Notes |
+|---|---|---|---|---|
+| Baltimore | MD | 238K | ✓ CSV | Derived millage from tax bills |
+| Bellingham | WA | 41K | ✓ CSV | Whatcom County ArcGIS |
+| Bryan | TX | 30K | ✓ CSV | Brazos County |
+| Charlottesville | VA | 15K | ✓ CSV | Independent city (no county) |
+| Cleveland | OH | 158K | ✓ CSV | 35% Ohio assessment ratio |
+| College Station | TX | 28K | ✓ CSV | Brazos County |
+| Fort Collins | CO | 71K | ✓ CSV | Larimer County; per-tax-area modeling |
+| Greeley | CO | 33K | ✓ CSV | Weld County |
+| Highlands Ranch | CO | 16K | ✓ CSV | Douglas County |
+| Philadelphia | PA | 580K | ✓ CSV (4 variants) | OPA via Carto; city+school levy; 2024 vintage |
+| Pueblo | CO | 47K | ✓ CSV | Pueblo County |
+| Rochester | NY | 58K | ✓ CSV | Homestead/non-homestead dual millage |
+| South Bend | IN | 44K | ✓ CSV | St. Joseph County |
+| St. Paul | MN | 72K | ✓ CSV | Full tax bill; Tax Capacity; condo collapse by PlatID |
+| Syracuse | NY | 42K | ✓ CSV | Onondaga County |
+| Cincinnati | OH | — | ✗ Blocked | CAGIS ArcGIS source gone; no current endpoint with land values |
+| Spokane | WA | — | ✗ Blocked | Needs `charge_info_1/2.xlsx` manually downloaded from Spokane County |
+| Denver | CO | — | ✗ Stub | Depends on manually-assembled data files not in repo |
+| Morgantown | WV | — | ✗ Stub | Modeling section incomplete |
+| Scranton | PA | — | ✗ Stub | Data fetch only; no modeling |
 
 ---
 
@@ -216,19 +231,39 @@ cp env.template .env
 # Add your Census API key (free at api.census.gov/data/key_signup.html)
 ```
 
-The recommended Python environment is 3.11+ with `geopandas`, `pandas`, `matplotlib`, `census`, and `jupyter`. The Jupyter kernel used for all notebooks is `cle-venv-new`.
+The recommended Python environment is 3.11+ with `geopandas`, `pandas`, `matplotlib`, `census`, and `jupyter`. The Jupyter kernel is `python3` (miniconda default on Windows).
+
+### Run all cities (batch)
+
+```bash
+python scripts/run_all_cities.py                   # all 16 runnable cities
+python scripts/run_all_cities.py st_paul cleveland  # specific cities
+```
+
+The runner auto-detects missing data caches and patches `data_scrape = 0 → 1` when needed, so it always fetches fresh data on first run then uses the cache on subsequent runs.
 
 ### Run a city manually
 
 ```bash
 cd cities/st_paul
-jupyter nbconvert --to notebook --execute --inplace \
+jupyter nbconvert --to notebook --execute \
+  --output _executed.ipynb \
   --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   model.ipynb
 ```
 
 Each notebook auto-detects locally cached data and skips re-scraping if a recent file exists.
+
+### Cross-city analysis
+
+After CSVs exist in `analysis/data/`:
+
+```bash
+cd analysis
+python cross_city_figures.py   # saves 4 figures + summary table to figures/cross_city/
+jupyter nbconvert --to notebook --execute cross_city.ipynb  # full interactive analysis
+```
 
 ---
 
