@@ -968,7 +968,21 @@ def _make_category_chart(
 
     colors = ['#8B0000' if v > 0 else '#228B22' for v in pcts]
     y = np.arange(n)
-    ax.barh(y, pcts, color=colors, edgecolor='none', height=0.75, alpha=0.92, zorder=2)
+
+    # --- Outlier capping ---------------------------------------------------
+    # When a bar exceeds 2× the second-largest absolute value, cap it visually.
+    # The label is rendered INSIDE the bar in white (rather than to its right),
+    # so it never collides with the Net Change column regardless of text width.
+    abs_vals = [abs(p) for p in pcts]
+    abs_sorted = sorted(abs_vals)
+    second_abs = abs_sorted[-2] if len(abs_sorted) >= 2 else abs_sorted[-1]
+    cap = second_abs * 2.0 if second_abs > 0 else abs_sorted[-1]
+    cap = max(cap, 20.0)
+    clipped = [abs(p) > cap for p in pcts]
+    display_pcts = [np.sign(p) * min(abs(p), cap) for p in pcts]
+    # -----------------------------------------------------------------------
+
+    ax.barh(y, display_pcts, color=colors, edgecolor='none', height=0.75, alpha=0.92, zorder=2)
 
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -976,24 +990,50 @@ def _make_category_chart(
     ax.grid(False)
     ax.axvline(0, color='black', linewidth=1, linestyle='dotted', zorder=1)
 
-    max_abs = max(abs(min(pcts)), abs(max(pcts))) if pcts else 1.0
+    # Axis range based on display (capped) values
+    max_abs = max(abs(d) for d in display_pcts) if display_pcts else 1.0
     right_x = max_abs + right_col_pad
 
     ax.text(right_x, n - 0.25, 'Net Change', ha='center', va='bottom',
             fontsize=15, fontweight='bold')
 
-    for i, (cat, pct, dol, cnt, tot) in enumerate(
-        zip(cats, pcts, dollars, counts, totals)
+    for i, (cat, pct, dp, dol, cnt, tot, is_clipped) in enumerate(
+        zip(cats, pcts, display_pcts, dollars, counts, totals, clipped)
     ):
-        tx = pct + 1.2 if pct >= 0 else pct - 1.2
-        ha = 'left' if pct >= 0 else 'right'
         dol_s = f'${dol:,.0f}' if dol >= 0 else f'-${abs(dol):,.0f}'
         tot_s = f'${tot:,.0f}' if tot >= 0 else f'-${abs(tot):,.0f}'
-        ax.text(tx, i + 0.18, cat, ha=ha, va='center', fontsize=14, fontweight='bold')
-        ax.text(tx, i - 0.03, f'Median: {dol_s}, {pct:+.1f}%', ha=ha, va='center',
-                fontsize=12, fontweight='bold')
-        ax.text(tx, i - 0.23, f'{cnt:,} parcels', ha=ha, va='center',
-                fontsize=11, color='#888888')
+
+        # Render inside-bar when the estimated label text width would overlap the
+        # Net Change column. Estimate text width in data units from character count
+        # and font size, accounting for the chart's data-per-inch scale.
+        _dpu = (2 * right_x + 60) / 17.0          # data units per inch
+        _cat_w  = len(cat)                    * (14 / 72) * 0.6 * _dpu
+        _med_w  = len(f'Median: {dol_s}, {pct:+.1f}%') * (12 / 72) * 0.6 * _dpu
+        _nc_hw  = 12                          * (12 / 72) * 0.6 * _dpu  # Net Change value half-width
+        is_cramped = (right_x - abs(dp)) < (max(_cat_w, _med_w) + _nc_hw)
+
+        if is_clipped or is_cramped:
+            # Render text INSIDE the bar in white — avoids any rightward overflow.
+            # Anchor just inside the (capped/cramped) bar end; right-align for positive bars.
+            sign = np.sign(pct)
+            tx   = dp - sign * 1.5
+            ha   = 'right' if pct >= 0 else 'left'
+            pct_marker = '▶' if is_clipped else ''
+            ax.text(tx, i + 0.18, cat, ha=ha, va='center',
+                    fontsize=14, fontweight='bold', color='white', zorder=4)
+            ax.text(tx, i - 0.03, f'Median: {dol_s}, {pct:+.1f}%{pct_marker}', ha=ha, va='center',
+                    fontsize=12, fontweight='bold', color='white', zorder=4)
+            ax.text(tx, i - 0.23, f'{cnt:,} parcels', ha=ha, va='center',
+                    fontsize=11, color='#dddddd', zorder=4)
+        else:
+            tx = dp + 1.2 if pct >= 0 else dp - 1.2
+            ha = 'left' if pct >= 0 else 'right'
+            ax.text(tx, i + 0.18, cat, ha=ha, va='center', fontsize=14, fontweight='bold')
+            ax.text(tx, i - 0.03, f'Median: {dol_s}, {pct:+.1f}%', ha=ha, va='center',
+                    fontsize=12, fontweight='bold')
+            ax.text(tx, i - 0.23, f'{cnt:,} parcels', ha=ha, va='center',
+                    fontsize=11, color='#888888')
+
         ax.text(right_x, i, tot_s, ha='center', va='center', fontsize=12, fontweight='bold')
 
     ax.set_title(f'Property Category Tax Impact — {city_title}',
