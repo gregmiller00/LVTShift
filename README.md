@@ -199,7 +199,7 @@ Census charts are generated when block-group income and minority data are availa
 | Scranton | PA | Split-rate 4:1 | Lackawanna County |
 | Syracuse | NY | Split-rate 4:1 | Onondaga County |
 | Charlottesville | VA | Split-rate 4:1 | Albemarle County GIS |
-| Philadelphia | PA | Split-rate 4:1 | OPA via Carto; combined city+school levy; 2024 assessment vintage |
+| Philadelphia | PA | Split-rate 4:1 (4 variants) | OPA land values + GMA hierarchical LYCD land values; standard and post-abatement baselines; combined city+school levy; 2024 assessment vintage |
 
 ---
 
