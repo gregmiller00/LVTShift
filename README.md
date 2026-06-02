@@ -219,6 +219,7 @@ All runnable cities use a harmonized **4:1 split-rate** scenario (land taxed at 
 | Fort Collins | CO | 71K | ✓ CSV | Larimer County; per-tax-area modeling |
 | Greeley | CO | 33K | ✓ CSV | Weld County |
 | Highlands Ranch | CO | 16K | ✓ CSV | Douglas County |
+| Oak Forest | IL | 10.7K | ✓ CSV | Cook County PTAXSIM + CCAO AV; city levy only; data from sibling project |
 | Philadelphia | PA | 580K | ✓ CSV (4 variants) | OPA via Carto; city+school levy; 2024 vintage |
 | Pueblo | CO | 47K | ✓ CSV | Pueblo County |
 | Rochester | NY | 58K | ✓ CSV | Homestead/non-homestead dual millage |
