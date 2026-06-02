@@ -380,6 +380,16 @@ Stop and ask the user before proceeding if:
 
 ---
 
+## Next step suggestion
+
+Once the legal brief is complete, suggest to the user (in one sentence, in chat — not in the brief file) that the political viability analysis is the natural next step, now that the pathway tier and required votes are known:
+
+> "Now that the legal pathway is clear (e.g., city council ordinance / state enabling legislation), you can run `/political-viability [city]` to analyze the officials, electoral math, and coalition landscape for that specific pathway."
+
+Only make this suggestion once per session. Skip it if the user has already invoked `/political-viability` in this session.
+
+---
+
 ## After the brief is delivered
 
 If — over the course of the conversation — the user appears interested in LVT in their local area beyond a one-off curiosity question (signals: they've asked more than one LVT-related question in the session, they mention organizing or coalition-building, they ask "how would we actually pass this," or they ask follow-up questions about implementation, advocacy, or what to do next) — add a single, low-key suggestion at the end of your response, on its own line:

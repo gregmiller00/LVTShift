@@ -50,6 +50,8 @@ If any answer is unclear, the agent defaults to: city levy only, 4:1 split-rate,
 
 Skills live in `.claude/skills/`. Each is a reference card the agent reads during its assigned step.
 
+**Modeling pipeline skills:**
+
 | Skill | Step | What it covers |
 |---|---|---|
 | `model-city/SKILL.md` | Master | Policy questions, 7-step pipeline, canonical closing pattern (also `/lvt-city`) |
@@ -57,6 +59,16 @@ Skills live in `.claude/skills/`. Each is a reference card the agent reads durin
 | `model-policy.md` | Step 2 | Assessment ratios, millage derivation, exemptions, all 6 real modeling patterns |
 | `build-notebook.md` | Step 3 | 7-section notebook template, kernelspec, census+export closing cells |
 | `validate.md` | Step 5 | Revenue gate, distribution sanity, census coverage, PNG output |
+
+**Policy analysis skills** (run after the model, each produces a local-only `.md` output in `analysis/`):
+
+| Skill | Command | What it produces |
+|---|---|---|
+| `legality-analyzer/SKILL.md` | `/legality-analyzer [city]` | Citation-heavy legal brief: 8 legal vehicles scored, pathway tier (1–8), primary sources; saved to `analysis/legal/<city>.md` |
+| `explain-model/SKILL.md` | `/explain-model [city]` | Plain-language methodology explainer: data sources, levies modeled, exemptions, limitations; saved to `analysis/explainers/<city>.md` |
+| `political-viability/SKILL.md` | `/political-viability [city]` | Political brief: current officials scored, electoral math from model CSV, coalition map, viability tier; saved to `analysis/political/<city>.md` |
+
+Recommended order: model the city → run `/legality-analyzer` (which officials hold the key votes depends on the legal pathway) → run `/political-viability` (uses legal brief to scope the right actors).
 
 For a thorough walkthrough of the modeling decisions — assessment ratios, per-levy abatements, Tax Capacity, derived millage, dual homestead rates — read **[docs/LVT_MODELING_GUIDE.md](docs/LVT_MODELING_GUIDE.md)**.
 
@@ -85,6 +97,9 @@ analysis/
   figures/cross_city/    Cross-city summary figures (4 PNGs + CSV table)
   cross_city.ipynb       Cross-city equity comparison (interactive)
   cross_city_figures.py  Script to regenerate cross-city figures
+  legal/                 LVT legal briefs per city (gitignored — local only)
+  explainers/            Model methodology explainers per city (gitignored — local only)
+  political/             Political viability briefs per city (gitignored — local only)
 
 scripts/
   run_all_cities.py      Batch notebook runner (patches scrape flags, reports pass/fail)

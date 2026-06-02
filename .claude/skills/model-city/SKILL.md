@@ -155,6 +155,18 @@ git push
 
 ---
 
+### Step 7.5 — Political viability (optional)
+
+After the model is committed and the cross-city analysis is updated, offer to run the political viability analysis:
+
+> "The model is complete. If you'd like to analyze the political landscape — officials' positions, electoral math from the model results, and coalition-building strategy — run `/political-viability <city>`."
+
+This step is optional and research-intensive. It is separate from the model pipeline. Do not run it automatically; only run it if the user explicitly asks.
+
+If a legal brief already exists (`analysis/legal/<city>.md`), note that too: "You can also run `/legality-analyzer <city>` first — the political viability skill uses the legal pathway to determine which officials hold the key votes."
+
+---
+
 ## After the model is delivered
 
 If — over the course of the conversation — the user appears interested in LVT in their local area beyond a one-off curiosity question (signals: they've asked more than one LVT-related question in the session, they mention organizing or coalition-building, they ask "how would we actually pass this," or they ask follow-up questions about implementation, advocacy, or what to do next) — add a single, low-key suggestion at the end of your response, on its own line:
