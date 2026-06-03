@@ -15,7 +15,7 @@ Richmond has the legal authority, the structural conditions, and nascent politic
 
 The gap is the council majority. The critical constraint revealed by the district-level model analysis is that **only 3 of 9 districts have an SFR homeowner majority that benefits** under a 4:1 split-rate (Districts 4, 8, and 9). A coalition built primarily on homeowner tax relief cannot cross the 5-vote threshold — it falls two votes short. The winning coalition must instead lead with the **blight/vacant land** and **housing production** frames, which appeal across districts regardless of homeowner win/loss status, and use homeowner relief as the district-specific close in the three favorable districts.
 
-**Top 2 risks:** (1) Organized commercial real estate opposition — 78% of commercial/industrial parcels see tax increases, and the Virginia Realtors and VAMA have track records opposing reform in Richmond; (2) Equity optics — the income quintile pattern shows lower-income block groups have higher mean tax changes (driven by vacant and commercial parcels, not SFR homeowners), and this can be weaponized by opponents.
+**Top 2 risks:** (1) Organized commercial real estate opposition — 78% of commercial/industrial parcels see tax increases, and the Virginia Realtors and VAMA have track records opposing reform in Richmond; (2) The income quintile *medians* are near-zero (±2%), meaning individual opponents may still attempt to construct equity arguments from selective data, even though the median parcel in every income group sees essentially no change.
 
 **Top opportunity:** The Code Refresh zoning overhaul is coming to council in spring 2026. LVT + Code Refresh is a natural pairing — LVT penalizes land-hoarding and rewards development, directly complementing density reform. A councilmember who already supports the Code Refresh has a coherent political narrative for supporting LVT.
 
@@ -73,25 +73,27 @@ The gap is the council majority. The critical constraint revealed by the distric
 
 ### Income Quintile Impact
 
-| Quintile | Mean tax change % | Political reading |
+| Quintile | Median tax change % | Political reading |
 |---|---|---|
-| Q1 (lowest income BGs) | +14.66% | Caution: lower-income neighborhoods show highest mean increase, driven by vacant lots and commercial parcels in those areas — not SFR homeowners. Opponents will cite this; requires active rebuttal. |
-| Q2 | +12.84% | Same dynamic. |
-| Q3 | +11.39% | Moderate-income areas also net positive mean on average. |
-| Q4 | +10.67% | |
-| Q5 (highest income BGs) | +8.25% | High-income areas (more improved land) see smallest mean increase. |
+| Q1 (lowest income BGs) | +1.44% | Near-zero: the typical parcel in lower-income block groups sees essentially no change. The equity concern raised by mean figures was an outlier artifact (a few large vacant/commercial parcels). |
+| Q2 | +0.55% | Near-zero. |
+| Q3 | +0.42% | Near-zero. |
+| Q4 | +2.17% | Small positive — slightly less favorable than Q3, but still near-zero. |
+| Q5 (highest income BGs) | +0.16% | Near-zero. No clear income gradient in median outcomes. |
 
-**Important caveat on income quintiles:** These are mean tax changes at the parcel level, averaged across ALL parcel types in each block group. The mean is pulled up by large increases on vacant land and commercial parcels, which are disproportionately located in lower-income areas. The median SFR change is negative city-wide (-0.48%), and the SFR homeowner majority-wins analysis (Section 4 district table) shows the individual-homeowner story is more nuanced. Opponents will cite the block-group mean; advocates should lead with the SFR median and the vacant-land penalty as the corrective narrative.
+**Interpretation:** Median tax changes are near-zero across all income quintiles, which is the correct characterization of a revenue-neutral reform that benefits ~47.5% of taxable parcels and burdens ~52.5%. The reform is essentially distributionally neutral at the median level. The earlier mean-based framing (which showed large positive values in Q1) was driven by outlier vacant-lot and commercial parcels; the median is the right statistic for constituent messaging about the typical parcel's experience.
 
 ### Minority Concentration Quintile Impact
 
-| Quintile | Mean tax change % | Political reading |
+| Quintile | Median tax change % | Political reading |
 |---|---|---|
-| Q1 (least minority BGs) | +9.40% | |
-| Q2 | +12.03% | |
-| Q3 | +10.28% | |
-| Q4 | +11.55% | |
-| Q5 (most minority BGs) | +17.56% | Highest minority-concentration block groups show highest mean increase — same vacant-lot/commercial dynamic. Must be proactively addressed: the anti-speculation vacant land penalty disproportionately affects speculative land bankers operating in communities of color, and forcing development reduces blight in those neighborhoods. |
+| Q1 (least minority BGs) | +2.96% | Small positive. |
+| Q2 | +2.07% | Small positive. |
+| Q3 | -0.82% | Slight benefit — mid-minority-concentration areas see typical parcel slightly decrease. |
+| Q4 | -1.17% | Slight benefit. |
+| Q5 (most minority BGs) | +2.96% | Small positive — tied with Q1. No clear gradient; highest-minority areas do not show systematically worse outcomes at the median level. |
+
+**Interpretation:** Median minority-quintile changes are small and mixed, with Q3 and Q4 seeing small decreases. The pattern does not show a systematic burden on higher-minority communities at the median level. The anti-speculation vacant-land framing remains the correct equity argument: vacant land speculation disproportionately causes blight in communities of color; LVT penalizes that speculation, which benefits those communities beyond the narrow tax-change metric.
 
 ### Vacant Land
 
@@ -232,7 +234,7 @@ The model data (7.3% vacant parcels, median +119% tax change on vacant land) and
 For outreach to Abubaker (D4), Trammell (D8), and Jones (D9) specifically: "84% of homeowners in your district would pay less." This is a direct constituent service argument that complements the broader blight frame and gives each member a district-specific talking point. Do NOT lead with this frame city-wide — it fails in 6 of 9 districts.
 
 **Frames to avoid:**
-- "Income-progressive tax reform" — the income quintile data (lower-income block groups show higher mean changes) can be used against this frame. The mean is driven by vacant/commercial parcels, not SFR owners, but the rebuttal is complex. Don't open this door.
+- "Income-progressive tax reform" — median quintile data shows near-zero changes across all income groups, so a strong equity argument in either direction is hard to sustain. The blight/housing-production frame is more powerful and less contestable.
 - "Revenue boost" — LVT is revenue-neutral in this model. Claiming a revenue increase misrepresents the model and will be fact-checked.
 - "All homeowners benefit" — demonstrably false for 6 of 9 districts. Any council member can find this data, and using a false claim destroys credibility with the rest of the argument.
 

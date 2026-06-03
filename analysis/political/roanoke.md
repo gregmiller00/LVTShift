@@ -69,25 +69,27 @@ The model data reinforces this opportunity: **64.2% of single-family homeowners 
 
 ### Income Quintile Impact
 
-| Quintile | Mean tax change % | Political reading |
+| Quintile | Median tax change % | Political reading |
 |---|---|---|
-| Q1 (lowest income BGs) | +33.88% | Caution required: lower-income block groups show the highest mean increase, driven by vacant land and commercial parcels in those areas. The SFR homeowners in these neighborhoods likely benefit, but opponents will cite this mean. Rebuttal: the vacant land penalty hits speculative land-bankers operating in low-income communities, not the residents. |
-| Q2 | +35.27% | Same dynamic — heavy vacant land concentration in lower-income areas. |
-| Q3 | +29.22% | Still positive mean, driven by commercial/vacant. |
-| Q4 | +13.95% | More improvement-heavy neighborhoods; smaller mean increase. |
-| Q5 (highest income BGs) | +15.99% | Upper-income neighborhoods also net positive mean (some commercial parcels). |
+| Q1 (lowest income BGs) | +0.17% | Near-zero: the typical parcel in lower-income block groups sees essentially no change. |
+| Q2 | -0.37% | Tiny benefit at the median. |
+| Q3 | +0.09% | Near-zero. |
+| Q4 | -1.64% | Small benefit — more improvement-heavy neighborhoods see typical parcel decrease slightly. |
+| Q5 (highest income BGs) | -0.40% | Small benefit at the median. |
 
-**Interpretation:** The income quintile pattern shows positive mean tax changes across all income levels, driven by vacant land and commercial parcels concentrated in lower-income areas. This is the same dynamic as Richmond. The homeowner-specific story (64.2% SFR wins, median -2.95%) is more accurate for constituent messaging than the block-group mean. Lead with the SFR median; anticipate and rebut the block-group mean argument proactively.
+**Interpretation:** Median tax changes are near-zero across all income quintiles — the reform is distributionally neutral at the typical-parcel level. The homeowner-specific story (64.2% SFR wins, median -2.95%) remains the right constituent message. The equity story is actually favorable: near-zero median changes mean no income group is systematically burdened, while the anti-speculation vacant-land penalty creates real benefits for communities affected by blight.
 
 ### Minority Concentration Quintile Impact
 
-| Quintile | Mean tax change % | Political reading |
+| Quintile | Median tax change % | Political reading |
 |---|---|---|
-| Q1 (least minority) | +19.86% | |
-| Q2 | +27.71% | |
-| Q3 | +30.92% | |
-| Q4 | +19.93% | |
-| Q5 (most minority) | +33.27% | Highest minority-concentration block groups show the highest mean increase — same vacant-land/commercial dynamic. Must be proactively addressed: vacant land speculation disproportionately harms communities of color through blight, and forcing development through LVT benefits those communities. |
+| Q1 (least minority) | -0.45% | Tiny benefit at the median. |
+| Q2 | +1.10% | Small positive. |
+| Q3 | +0.18% | Near-zero. |
+| Q4 | -1.81% | Small benefit — higher-minority areas show slightly favorable median outcome. |
+| Q5 (most minority) | -1.40% | Small benefit. Higher-minority-concentration areas show better median outcomes than lower-minority areas — the equity story is more favorable than mean figures suggested. |
+
+**Interpretation:** Median minority-quintile changes are small and actually show Q4–Q5 (higher minority concentration) with slight benefits. The equity argument is: LVT penalizes vacant land speculation, which disproportionately causes blight in communities of color; the median parcel in those communities sees essentially no tax increase while the speculative land holders do.
 
 ### Vacant Land
 
@@ -229,7 +231,7 @@ For constituent outreach to the three new members (McGuire, Nash, Hagen), the ho
 **Frames to avoid:**
 - "This will create housing production" — connects to the zoning controversy and may activate McGuire/Hagen skepticism
 - "Land value tax" as the primary label — lead with "lower improvement taxes, higher land holding costs" or "the blight tax extended system-wide"
-- Income-quintile equity argument based on block-group means — the Q1 (+33.88%) and minority-concentration (+33.27%) data will be weaponized by opponents; lead with SFR medians instead
+- Leading with income/minority quintile data at all — near-zero medians across all groups mean neither a strong equity-positive nor equity-negative argument is well-supported; the blight/homeowner-relief frames are more compelling and data-backed
 
 ### Key Talking Points (Grounded in Model Data)
 
