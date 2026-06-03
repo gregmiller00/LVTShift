@@ -80,8 +80,8 @@ If model export present, compute from `analysis/data/<city>.csv`:
 - `pct_sfr_decreasing` = same, filtered to `property_category == "Single Family Residential"`
 - `median_sfr_change_pct` = median `tax_change_pct` among SFR parcels
 - `pct_commercial_increasing` = share of commercial/industrial parcels with `tax_change > 0`
-- Income quintile table: group non-exempt parcels by `median_income` quintile; report mean `tax_change_pct` per quintile
-- Minority quintile table: group by `minority_pct` quintile; report mean `tax_change_pct`
+- Income quintile table: group non-exempt parcels by `median_income` quintile; report **median** `tax_change_pct` per quintile
+- Minority quintile table: group by `minority_pct` quintile; report **median** `tax_change_pct`
 
 **District-level computation (conditional — attempt for every city):**
 
@@ -404,7 +404,7 @@ One paragraph: viability tier rationale. Top 2 risks. Top 1 opportunity. What wo
 - Commercial/industrial parcels with tax increase: [X%]
 
 ### Income quintile impact
-| Quintile | Mean tax change % | Political reading |
+| Quintile | Median tax change % | Political reading |
 |---|---|---|
 | Q1 (lowest) | | |
 | Q2 | | |
