@@ -83,6 +83,58 @@ If model export present, compute from `analysis/data/<city>.csv`:
 - Income quintile table: group non-exempt parcels by `median_income` quintile; report mean `tax_change_pct` per quintile
 - Minority quintile table: group by `minority_pct` quintile; report mean `tax_change_pct`
 
+**District-level computation (conditional — attempt for every city):**
+
+Try to fetch council district boundary shapefiles. Attempt these sources in order, stopping at the first success:
+1. City's ArcGIS Hub or open data portal (search `"[city] council district" site:hub.arcgis.com` or `"[city] open data" council district shapefile`)
+2. City's GIS REST services (search `"[city]" "council district" "FeatureServer" OR "MapServer"`)
+3. State open data portals or ESRI Living Atlas
+
+If boundaries are found, run the spatial join in Python:
+
+```python
+import geopandas as gpd
+import pandas as pd
+
+# Load parcel geometry from cached GeoParquet
+parcels = gpd.read_parquet(f'cities/{city_slug}/data/parcels.gpq')
+
+# Load model results and join onto parcels (match on parcel ID column)
+model_df = pd.read_csv(f'analysis/data/{city_slug}.csv')
+# Use whatever the parcel ID column is (PIN, PARID, etc.)
+parcels = parcels.merge(
+    model_df[['PIN', 'tax_change', 'tax_change_pct', 'property_category', 'current_tax']],
+    on='PIN', how='left'
+)
+
+# Spatial join using centroids to avoid edge effects
+parcels_pts = parcels.copy()
+parcels_pts['geometry'] = parcels_pts.geometry.centroid
+parcels_pts = parcels_pts.to_crs('EPSG:4326')
+districts = gpd.read_file(district_url_or_path).to_crs('EPSG:4326')
+
+joined = gpd.sjoin(parcels_pts, districts[['DISTRICT_COL', 'geometry']],
+                   how='left', predicate='within')
+
+# Per-district stats
+def district_stats(df):
+    sfr = df[df['property_category'] == 'Single Family Residential']
+    return pd.Series({
+        'n_parcels': len(df),
+        'pct_decreasing': (df['tax_change'] < 0).mean() * 100,
+        'pct_sfr_decreasing': (sfr['tax_change'] < 0).mean() * 100 if len(sfr) else float('nan'),
+        'median_sfr_change_pct': sfr['tax_change_pct'].median() if len(sfr) else float('nan'),
+        'median_overall_change_pct': df['tax_change_pct'].median(),
+        'sfr_majority_wins': (sfr['tax_change'] < 0).mean() > 0.5 if len(sfr) else False,
+    })
+
+district_table = joined.groupby('DISTRICT_COL').apply(district_stats).reset_index()
+```
+
+Report per district: parcel count, % taxable parcels with tax decrease, % SFR parcels with tax decrease, median SFR tax change %, and a **"SFR majority wins?"** flag (True if >50% of SFR parcels in the district see a tax decrease). This flag directly answers the question: "Is this a defensible vote for the councilmember representing this district?"
+
+If district boundaries cannot be found after attempting all three sources, note "District boundaries not found — searched [sources attempted]. District-level breakdown not computed." Do not block the rest of the analysis.
+
 ---
 
 ### Layer 1 — Identify political actors
@@ -99,6 +151,7 @@ Using web search, Ballotpedia, and the city's official website:
    - Term end / next election date
    - Electoral base (district description, owner-vs-renter-heavy neighborhoods if known)
    - Whether their seat is currently competitive or safe
+   - **District winner flag** (from Layer 0 district computation, if available): whether >50% of SFR parcels in their district see a tax decrease. Include this in the officials table as a "District wins?" column. If district data is unavailable, leave as "N/A."
 
 **Prioritization rule:** Research depth follows vote importance. The mayor (or council president) who sets the agenda gets the most thorough research. A member without a committee role gets standard research. State legislators get standard research unless they chair the relevant committee.
 
@@ -199,6 +252,19 @@ Report:
 - **Minority quintile pattern** — same by minority concentration
 - **Vacant land share** — what % of parcels are vacant land? High vacant-land shares = strong blight-frame opportunity
 - **Top vacant land owners** — if available from a policy analysis output (`analysis/political/<city>_policy.csv` or similar), name the top landowners by vacant acreage. Large institutional or corporate land-bankers make vivid political messaging; small scattered lots owned by many individuals do not.
+
+**District-level breakdown (from Layer 0 computation, if available):**
+
+| District | Councilmember | % All parcels ↓ | % SFR ↓ | Median SFR Δ% | SFR majority wins? |
+|---|---|---|---|---|---|
+| 1 | [Name] | [X%] | [X%] | [X%] | Yes / No / N/A |
+| … | … | … | … | … | … |
+
+Interpret each district row politically: a "Yes" in the SFR majority wins column means the councilmember can tell homeowner constituents that the median homeowner in their district comes out ahead. A "No" means the opposite and signals likely resistance or a need for targeted constituent messaging before that vote.
+
+Note the **minimum winning coalition**: how many districts have SFR majority wins? If that number exceeds the votes needed to pass (e.g., 5 of 9 for a simple majority), the council has a latent majority available if those members can be persuaded on other grounds. If fewer districts have SFR wins than the votes needed, flag this as a structural constraint — the reform cannot be sold primarily on homeowner-relief grounds.
+
+If district data is unavailable, write "District-level breakdown not computed — [reason from Layer 0]."
 
 Interpret each number in political terms, not just as a fact. "83% of single-family parcels see a tax decrease" → "The median homeowner constituency is a net winner — this is a defensible vote for most district-level council members."
 
@@ -321,9 +387,11 @@ One paragraph: viability tier rationale. Top 2 risks. Top 1 opportunity. What wo
   - Key stats: [% decreasing, SFR median, income quintile direction]
 
 ## 3. Political actors
-| Name | Role | Term ends | Electoral base | Score | Confidence | Key evidence |
-|---|---|---|---|---|---|---|
-| [name] | [role] | [date] | [description] | [+2 to -2] | [H/M/L] | [quote or vote, with link] |
+| Name | Role | Term ends | Electoral base | District wins? | Score | Confidence | Key evidence |
+|---|---|---|---|---|---|---|---|
+| [name] | [role] | [date] | [description] | [Yes / No / N/A] | [+2 to -2] | [H/M/L] | [quote or vote, with link] |
+
+"District wins?" = Yes if >50% of SFR parcels in this official's district see a tax decrease under the model; No if not; N/A if district data unavailable.
 
 [Repeat for each official. If state action required, include a separate sub-table for state legislators.]
 
@@ -350,6 +418,15 @@ One paragraph: viability tier rationale. Top 2 risks. Top 1 opportunity. What wo
 ### Vacant land
 - Vacant parcels as % of all taxable: [X%]
 - Top land-bank owners (if available): [list or "data not available"]
+
+### District-level breakdown
+[Populated from Layer 0 district computation, or "not computed — [reason]".]
+
+| District | Councilmember | % All parcels ↓ | % SFR ↓ | Median SFR Δ% | SFR majority wins? |
+|---|---|---|---|---|---|
+| [1] | [Name] | [X%] | [X%] | [X%] | Yes / No |
+
+**Minimum winning coalition analysis:** [N] of [M] districts have SFR majority wins. Votes needed to pass: [N]. [Interpretation: e.g., "A latent homeowner-relief majority exists across 6 of 9 districts — more than the 5 votes needed for passage."]
 
 ## 5. Political environment
 ### Issue salience
@@ -464,6 +541,12 @@ If the legal brief says state action is required, Section 3 includes at least on
 
 **Pass:** scope of officials researched matches the required legal pathway.
 **Fail:** analyzing the wrong set of officials for the applicable pathway, or recommending a higher-tier pathway when a lower one is available.
+
+### Gate 5 — District analysis attempted
+Section 4 includes a district-level breakdown, OR explicitly states why it could not be computed (district boundaries not found, city uses at-large council, etc.). Silence is not acceptable.
+
+**Pass:** Section 4 has a populated district table OR a "not computed" explanation naming the sources attempted.
+**Fail:** Section 4 has no district subsection at all.
 
 ---
 
