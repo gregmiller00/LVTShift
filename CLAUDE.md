@@ -135,6 +135,10 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **Kernel name:** On Windows, the `cle-venv-new` kernel may not be registered. Check `jupyter kernelspec list` and use the available kernel (e.g., `python3`) for `nbconvert --execute`.
 
+**Philadelphia has four notebooks.** `cities/philadelphia/` contains `model.ipynb` (OPA), `model_lycd.ipynb` (LYCD), `model_post_abatement.ipynb` (OPA post-abatement), and `model_lycd_post_abatement.ipynb` (LYCD post-abatement). All four export to `analysis/data/philadelphia*.csv` with a `parcel_id` column (added via `parcel_id_col='parcel_number'` in `save_standard_export`).
+
+**`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
+
 ## Notebooks
 
 Located in `cities/<city>/model.ipynb`. Each follows a pattern:
@@ -146,6 +150,8 @@ Located in `cities/<city>/model.ipynb`. Each follows a pattern:
 6. Visualize by category (bar charts, butterfly charts, scatter plots)
 7. Merge Census data for equity analysis (income/minority quintiles)
 8. `save_standard_export()` → `create_city_report()`
+
+`save_standard_export` accepts an optional `parcel_id_col` parameter. When provided (e.g., `parcel_id_col='parcel_number'`), a `parcel_id` column is prepended to the output CSV, enabling downstream spatial joins without re-running the notebook.
 
 Data stored locally in `cities/<city>/data/` as geoparquet files (gitignored).
 
