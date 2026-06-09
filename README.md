@@ -1,8 +1,8 @@
 # LVTShift
 
-**LVTShift** is a research toolkit for modeling Land Value Tax (LVT) policy shifts in U.S. cities. Built by the [Center for Land Economics](https://landeconomics.org), it quantifies how shifting from a traditional property tax to a land value tax affects neighborhoods, property types, and demographic groups — and produces publication-ready charts from any city's data.
+**LVTShift** is a research toolkit for modeling Land Value Tax (LVT) policy shifts in U.S. cities. Built by the [Center for Land Economics](https://landeconomics.org), it quantifies how shifting from a traditional property tax to a land value tax affects neighborhoods, property types, and demographic groups — and produces publication-ready charts from any city's parcel data.
 
-This repository is designed to be operated by AI agents. Adding a new city is a single natural-language command.
+This repository is designed to be driven by an AI coding agent in plain English. Modeling a new city is a single command.
 
 ---
 
@@ -17,48 +17,92 @@ A Land Value Tax taxes only the value of land, not the buildings on it. This cha
 
 ---
 
-## Adding a City (Agent Workflow)
+## The Commands
 
-Say to your agent:
+LVTShift ships four agent skills, exposed as slash commands in Claude Code. Other coding agents (Codex, etc.) can read the same skill files in `.claude/skills/` and follow them.
 
-> **"Add [city] to LVTShift"** or **"Model LVT for [city]"**
+| Command | What it does |
+|---|---|
+| `/legality-analyzer <place>` | Maps the legal pathway to LVT in a city or state — constitution, statutes, case law — and identifies which reform vehicles (split-rate, building exemption, classification, …) are open. |
+| `/lvt-city <city>` | Runs the full modeling pipeline end-to-end: finds the data, rebuilds the current tax system, models the proposed policy, and produces parcel-level results and graphics. |
+| `/explain-model <city>` | Writes a plain-language methodology audit of an existing model — data used, levies included and excluded, exemption treatment, limitations. |
+| `/refine-model <city>` | Re-runs an existing model with changed parameters: a new split ratio, a switch to building abatement, different exemptions, or a wider levy scope. |
 
-The agent reads `.claude/skills/model-city/SKILL.md` (or you can invoke `/lvt-city`) and runs the full pipeline:
+A typical flow: `/legality-analyzer Spokane` to find the legally and politically viable reform, then `/lvt-city Spokane with a 50% building exemption` to model it.
 
-1. Asks five policy questions (levy scope, reform type, exemptions, county/state, official revenue figure)
-2. Finds the county ArcGIS endpoint and downloads parcel data
-3. Models the current tax system — handling assessment ratios, millage sources, and exemptions correctly for that jurisdiction
-4. Implements the split-rate or building abatement scenario
-5. Joins Census block-group demographics (income, race)
-6. Exports a standardized 16-column CSV and generates 7 publication-ready PNGs
-7. Re-runs the cross-city comparison analysis
-8. Commits the result
+### What `/lvt-city` asks you
 
-The five upfront questions matter because they cannot be changed midway:
+Five questions, up front, because they cannot be changed midway:
 
 ```
 1. Which government body? (city only / full stack / specific levies)
 2. Which reform? (split-rate N:1 / building abatement X% / both)
 3. Keep existing exemptions? (yes / no — what changes?)
-4. County and state? (for Census FIPS code)
+4. County and state? (for the Census FIPS code)
 5. Official revenue figure to validate against?
 ```
 
 If any answer is unclear, the agent defaults to: city levy only, 4:1 split-rate, preserve all existing exemptions.
 
+### What you get
+
+- A standardized CSV in `analysis/data/<city>.csv` — every parcel, its current tax as rebuilt by the model, and its new tax under the proposed policy
+- Up to 7 PNG charts in `analysis/reports/<city>/`: median change by property category, share of parcels moving more than 10%, the full distribution, and income / minority-share quintile charts for equity analysis
+- An updated cross-city comparison (`analysis/cross_city.ipynb`)
+
+The results are deterministic: the agent writes a Python notebook (`cities/<city>/model.ipynb`) and the notebook does the modeling, so re-running it produces the same numbers every time.
+
 ### Skills Reference
 
 Skills live in `.claude/skills/`. Each is a reference card the agent reads during its assigned step.
 
-| Skill | Step | What it covers |
+| Skill | Role | What it covers |
 |---|---|---|
-| `model-city/SKILL.md` | Master | Policy questions, 7-step pipeline, canonical closing pattern (also `/lvt-city`) |
-| `discover-data.md` | Step 1 | Finding ArcGIS endpoints, pagination, city filtering, column mapping |
-| `model-policy.md` | Step 2 | Assessment ratios, millage derivation, exemptions, all 6 real modeling patterns |
-| `build-notebook.md` | Step 3 | 7-section notebook template, kernelspec, census+export closing cells |
-| `validate.md` | Step 5 | Revenue gate, distribution sanity, census coverage, PNG output |
+| `model-city/SKILL.md` | Master pipeline (`/lvt-city`) | Policy questions, 7-step pipeline, canonical closing pattern |
+| `discover-data.md` | Pipeline step 1 | Finding ArcGIS endpoints, pagination, city filtering, column mapping |
+| `model-policy.md` | Pipeline step 2 | Assessment ratios, millage derivation, exemptions, all real modeling patterns |
+| `build-notebook.md` | Pipeline step 3 | 7-section notebook template, kernelspec, census + export closing cells |
+| `validate.md` | Pipeline step 5 | Revenue gate, distribution sanity, census coverage, PNG output |
+| `legality-analyzer/SKILL.md` | Standalone (`/legality-analyzer`) | Citation-heavy legal brief per `docs/LVT_LEGAL_DECISIONING_GUIDE.md` |
+| `explain-model/SKILL.md` | Standalone (`/explain-model`) | Methodology audit of an existing city model |
+| `refine-model/SKILL.md` | Standalone (`/refine-model`) | Surgical re-run with changed parameters, before/after diff |
 
 For a thorough walkthrough of the modeling decisions — assessment ratios, per-levy abatements, Tax Capacity, derived millage, dual homestead rates — read **[docs/LVT_MODELING_GUIDE.md](docs/LVT_MODELING_GUIDE.md)**.
+
+---
+
+## Getting Started
+
+You do not need to be technical. From a coding agent (Claude Code, Codex, etc.):
+
+1. Clone this repo and tell the agent to *"set this repo up and install the requirements."*
+2. Get a free Census API key at [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html) — it powers the neighborhood income and demographic analysis. Copy `env.template` to `.env` and paste the key in. (The agent can walk you through this too.)
+3. Type `/lvt-city <your city>` and answer the five questions.
+
+Manual setup, if you prefer:
+
+```bash
+git clone https://github.com/gregmiller00/LVTShift.git
+cd LVTShift
+pip install -r requirements.txt
+
+cp env.template .env
+# Add your Census API key (free at api.census.gov/data/key_signup.html)
+```
+
+Python 3.11+ is recommended. Notebooks use the standard `python3` Jupyter kernel, which is included via `ipykernel` in the requirements.
+
+### Run a city manually
+
+```bash
+cd cities/st_paul
+jupyter nbconvert --to notebook --execute --inplace \
+  --ExecutePreprocessor.timeout=600 \
+  --ExecutePreprocessor.kernel_name=python3 \
+  model.ipynb
+```
+
+Each notebook auto-detects locally cached data and skips re-scraping if a recent file exists.
 
 ---
 
@@ -67,34 +111,27 @@ For a thorough walkthrough of the modeling decisions — assessment ratios, per-
 ```
 lvt/
   lvt_utils.py       Core tax modeling (split-rate, building abatement, exemptions)
-  viz.py             Standard charts and city report generation
+  viz.py             Standard charts and the 7-PNG city report
   cloud_utils.py     Fetch parcel data from county ArcGIS FeatureServers
   census_utils.py    Fetch ACS demographics and spatial-join to parcels
-  policy_analysis.py Vacant land, parking lot, and development barrier analysis
+  policy_analysis.py Vacant land, parking lot, and development-barrier analysis
 
-cities/              One notebook per city
-  st_paul/
-  spokane/
-  southbend/
-  baltimore/
-  ...
-
+cities/<city>/model.ipynb    One notebook per city — the reproducible model
 analysis/
   data/              Standard exported CSVs (one per city)
   reports/           PNG charts (one folder per city)
   cross_city.ipynb   Cross-city equity comparison
 
-docs/
-  LVT_MODELING_GUIDE.md   Full modeling reference
-
-.claude/skills/      Agent skill files (read by Claude during pipeline execution)
+.claude/skills/      Agent skill files (read by the agent during pipeline execution)
+.claude/commands/    Slash-command wrappers for the four user-facing skills
+docs/                LVT_MODELING_GUIDE.md and LVT_LEGAL_DECISIONING_GUIDE.md
 ```
 
 **Data flow:**
 
 ```
 Fetch parcels (cloud_utils)
-  → Classify property types → Calculate current tax
+  → Classify property types → Rebuild current tax
   → Model LVT scenario (lvt_utils) → Merge Census demographics (census_utils)
   → save_standard_export() → create_city_report()
 ```
@@ -106,6 +143,7 @@ Fetch parcels (cloud_utils)
 Two primary LVT scenarios are implemented, both revenue-neutral:
 
 ### Split-Rate Tax
+
 Tax land and improvements at different millage rates. A 4:1 ratio means land is taxed at four times the rate of buildings.
 
 ```python
@@ -113,15 +151,16 @@ from lvt.lvt_utils import model_split_rate_tax
 
 land_mill, imp_mill, revenue, df = model_split_rate_tax(
     df=parcels,
-    land_value_col='EMVLand1',
-    improvement_value_col='EMVBuilding1',
+    land_value_col='land_value',
+    improvement_value_col='improvement_value',
     current_revenue=current_revenue,
     land_improvement_ratio=4.0,
 )
 ```
 
 ### Building Abatement / Stacking Exemption
-Exempt a percentage of improvement value from taxation, with a floor exemption. Used in Spokane, modeled per-levy.
+
+Exempt a percentage of improvement value from taxation, optionally with a floor exemption, modeled per-levy where needed. This is the pathway for states (like Washington) whose constitutions bar split rates but permit broad exemptions.
 
 ```python
 from lvt.lvt_utils import model_stacking_improvement_exemption
@@ -150,6 +189,7 @@ Cities require different treatment of the tax base before modeling. Examples:
 | Derived millage | Baltimore | Back-calculated from observed tax bills in parcel file |
 | Dual millage | Rochester | Separate homestead and non-homestead rates |
 | Per-levy abatement | Spokane | 8 levies modeled independently |
+| Entity-specific exemptions | Bryan / College Station | Texas homestead and over-65 exemptions per taxing entity |
 
 See `model-policy.md` or `docs/LVT_MODELING_GUIDE.md` for code examples of each.
 
@@ -160,7 +200,7 @@ See `model-policy.md` or `docs/LVT_MODELING_GUIDE.md` for code examples of each.
 Every city notebook ends with:
 
 ```python
-# 1. Write a 16-column standardized CSV
+# 1. Write a standardized CSV
 out_df = save_standard_export(df, city='st_paul', output_path='../../analysis/data/st_paul.csv', ...)
 
 # 2. Generate PNG charts into analysis/reports/<city>/
@@ -185,49 +225,11 @@ Census charts are generated when block-group income and minority data are availa
 
 ## Cities Modeled
 
-| City | State | Model | Key Notes |
-|---|---|---|---|
-| St. Paul | MN | Split-rate 4:1 (Tax Capacity) | Full city tax bill; condo collapse by PlatID |
-| Spokane | WA | Building abatement 75% | 8 levies modeled independently |
-| South Bend | IN | Split-rate 4:1 | St. Joseph County ArcGIS |
-| Baltimore | MD | Split-rate | Already split-rate; models deeper shift |
-| Rochester | NY | Split-rate 10:1 | Homestead/non-homestead dual millage |
-| Bellingham | WA | Split-rate 4:1 | Whatcom County |
-| Cincinnati | OH | Split-rate 4:1 | 35% Ohio assessment ratio |
-| Fort Collins | CO | Split-rate 4:1 | Larimer County |
-| Morgantown | WV | Split-rate 4:1 | Monongalia County |
-| Scranton | PA | Split-rate 4:1 | Lackawanna County |
-| Syracuse | NY | Split-rate 4:1 | Onondaga County |
-| Charlottesville | VA | Split-rate 4:1 | Albemarle County GIS |
+Complete models, each with a notebook, standardized export, and report:
 
----
+Baltimore MD, Bellingham WA, Bryan TX, Charlottesville VA, Cincinnati OH, Cleveland OH, College Station TX, Fort Collins CO, Greeley CO, Highlands Ranch CO, Pittsburgh PA, Pueblo CO, Rochester NY, Seattle WA, South Bend IN, Spokane WA, St. Paul MN, and Syracuse NY.
 
-## Getting Started
-
-### Environment
-
-```bash
-git clone https://github.com/gregmiller00/LVTShift.git
-cd LVTShift
-pip install -r requirements.txt
-
-cp env.template .env
-# Add your Census API key (free at api.census.gov/data/key_signup.html)
-```
-
-The recommended Python environment is 3.11+ with `geopandas`, `pandas`, `matplotlib`, `census`, and `jupyter`. The Jupyter kernel used for all notebooks is `cle-venv-new`.
-
-### Run a city manually
-
-```bash
-cd cities/st_paul
-jupyter nbconvert --to notebook --execute --inplace \
-  --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
-  model.ipynb
-```
-
-Each notebook auto-detects locally cached data and skips re-scraping if a recent file exists.
+A few more (Denver, Morgantown, Scranton) are in progress. Each city's methodology — which levies were modeled, how exemptions were treated, what the land/improvement split rests on — is documented in its notebook and can be audited with `/explain-model <city>`.
 
 ---
 
@@ -241,9 +243,15 @@ Each notebook auto-detects locally cached data and skips re-scraping if a recent
 
 **Centroid-based spatial joins** — Parcels are joined to Census block groups via centroids in EPSG:3857 to avoid boundary edge cases.
 
-**Census fallback chain** — TIGERweb single request → chunked by tract → FTP shapefile download. API calls run in a background thread with a 90-second timeout.
+**Census resilience** — TIGERweb single request, with automatic chunking by tract for very large counties. API calls run in a background thread with a 90-second timeout so a hung request never stalls the pipeline.
 
-**Condo collapse (St. Paul / Ramsey County)** — Condo units receive token $1,000 land assessments. Before modeling, units are collapsed by PlatID into buildings with imputed land values from neighborhood median improvement ratios.
+**Deterministic models** — The agent writes the notebook; the notebook does the math. Same inputs, same outputs, every run.
+
+---
+
+## Contributing
+
+Found a bug, want a new chart, or keep correcting the agent on the same thing? Open an issue or a PR — improvements to the skill files are as welcome as improvements to the code.
 
 ---
 

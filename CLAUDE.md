@@ -6,15 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 LVTShift is a toolkit for modeling Land Value Tax (LVT) policy shifts in U.S. cities/counties. It analyzes how shifting from traditional property taxes to land value taxes affects neighborhoods, property types, and demographic groups. Created by the Center for Land Economics.
 
+The repo is designed to be driven by an agent. The user-facing entry points are four skills (see Skills below); most work happens inside per-city Jupyter notebooks that import the `lvt/` package.
+
 ## Environment Setup
 
 ```bash
-# Python environment with pandas/geopandas
-cd ~/packaging-test && source pkg-test/bin/activate
+# Any Python 3.11+ environment works; install the requirements into it
+pip install -r requirements.txt
 
 # Environment variables
 cp env.template .env
 # Add CENSUS_API_KEY (free at https://api.census.gov/data/key_signup.html)
+```
+
+Notebooks use the standard `python3` Jupyter kernel (provided by `ipykernel`, which is in the requirements). Execute headlessly with:
+
+```bash
+jupyter nbconvert --to notebook --execute --inplace \
+  --ExecutePreprocessor.timeout=600 \
+  --ExecutePreprocessor.kernel_name=python3 \
+  model.ipynb
 ```
 
 ### Loading `.env` in notebooks and scripts
@@ -40,8 +51,16 @@ load_dotenv(REPO_ROOT / '.env')
 Without this, `os.getenv("CENSUS_API_KEY")` returns `""` and the Census/equity sections
 silently fall through.
 
-When adding a new script under `scripts/` that needs a secret, replicate the same
-pattern at the top of the file.
+## Skills
+
+The four user-facing skills live in `.claude/skills/` with slash-command wrappers in `.claude/commands/`:
+
+- **model-city** (`/lvt-city`) — full pipeline for a new city. Orchestrates the sub-skills `discover-data.md` → `model-policy.md` → `build-notebook.md` → `validate.md`, then runs the canonical census join + standard export + 7-PNG report.
+- **legality-analyzer** (`/legality-analyzer`) — legal pathway brief for a city/state, grounded in `docs/LVT_LEGAL_DECISIONING_GUIDE.md`.
+- **explain-model** (`/explain-model`) — plain-language methodology audit of an existing city model.
+- **refine-model** (`/refine-model`) — re-run an existing model with changed parameters (split ratio, abatement, exemptions, levy scope) via minimal notebook edits.
+
+When modifying the pipeline, change the skill files — they are the canonical spec; this file is only a map.
 
 ## Architecture
 
@@ -52,7 +71,7 @@ lvt/cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
 lvt/census_utils.py    → Fetch Census demographics, spatial join to parcels
 lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions)
 lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
-lvt/viz.py             → Scatter plots, quintile analysis, demographic charts
+lvt/viz.py             → Scatter plots, quintile analysis, demographic charts, city report
 ```
 
 Notebooks import via the package:
@@ -62,15 +81,7 @@ from lvt.lvt_utils import model_split_rate_tax
 from lvt.cloud_utils import get_feature_data_with_geometry
 ```
 
-**Data flow**: Fetch parcels (cloud_utils) → calculate current tax → collapse condos by PlatID with imputed land values → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → analyze equity impacts (viz/policy_analysis)
-
-### Condo Collapse
-
-Ramsey County assigns condo units token land values ($1,000/unit), not real assessments. Before modeling, condos are collapsed by `PlatID` into buildings:
-- **Sum**: EMVTotal1, TaxCapacity, TotalTax1
-- **Impute**: EMVLand1/EMVBuilding1 from neighborhood (District Council) median IR of non-condo parcels
-- Geometries are unioned via `collapse_geometries()`
-- Both collapse options (A: first-value, B: imputed IR) are in the code; Option B is used downstream
+**Data flow**: Fetch parcels (cloud_utils) → classify property types → rebuild current tax → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → `save_standard_export()` → `create_city_report()` (viz)
 
 ### Key Design Patterns
 
@@ -79,18 +90,23 @@ Ramsey County assigns condo units token land values ($1,000/unit), not real asse
 - **Millage rates are per $1000**: `model_split_rate_tax()` returns millage in per-$1000 units. Tax = `value * millage / 1000`
 - **Exemption hierarchy**: Full exemption flags applied first → dollar exemptions to improvements → remaining to land
 - **Centroid-based spatial joins**: Parcels joined to Census block groups via centroids in EPSG:3857 to avoid boundary edge cases
-- **Census fallback chain**: TIGERweb single request → chunked by tract → FTP shapefile download
+- **Census fetching**: TIGERweb block-group request (Layer 1), automatically chunked by tract for very large counties; calls run in a background thread with a 90-second timeout
+
+### Jurisdiction-Specific Patterns
+
+The tax base works differently by state; `model-policy.md` documents all real patterns with code. Examples: Ohio's 35% assessment ratio (Cincinnati), Minnesota Tax Capacity class rates (St. Paul), derived millage from observed bills (Baltimore), dual homestead/non-homestead rates (Rochester), per-levy abatement (Spokane), Texas entity-specific homestead/over-65 exemptions (Bryan, College Station).
+
+One recurring pattern worth knowing: **condo collapse** (St. Paul / Ramsey County). Some assessors give condo units token land values ($1,000/unit). Before modeling, condos are collapsed by `PlatID` into buildings — summing values/taxes, imputing the land/building split from the neighborhood median improvement ratio of non-condo parcels, and unioning geometries via `collapse_geometries()`.
 
 ### lvt_utils.py (core modeling)
 
 Key functions:
 - `model_split_rate_tax(df, land_value_col, improvement_value_col, current_revenue, land_improvement_ratio)` → returns `(land_millage, imp_millage, revenue, df_with_new_tax)`
+- `model_full_building_abatement` / `model_stacking_improvement_exemption` → building-exemption pathway
+- `calculate_current_tax(...)` → rebuild the existing system, honoring exemptions
 - `calculate_category_tax_summary(df, category_col, current_tax_col, new_tax_col)` → summary stats by property type
+- `save_standard_export(...)` → standardized per-parcel CSV in `analysis/data/<city>.csv`
 - `ensure_geodataframe(df)` → handles WKT, WKB hex, and binary geometry encodings
-
-Two modeling approaches used in St. Paul:
-1. **EMV approach**: Split-rate applied to raw Estimated Market Values (EMVLand, EMVBuilding)
-2. **Tax Capacity approach**: Split TaxCapacity by improvement ratio (IR = Building/Total EMV), then apply split-rate. Preserves Minnesota's class rate preferences.
 
 ### cloud_utils.py (data fetching)
 
@@ -101,26 +117,24 @@ Two modeling approaches used in St. Paul:
 
 - `get_census_data_with_boundaries(fips_code, year)` → returns `(census_data, census_boundaries)`
 - `match_to_census_blockgroups(gdf, census_gdf)` → spatial join parcels to block groups
-- Auto-detects large counties (Cook, LA, Harris) for chunked fetching
+- Auto-detects large counties (Cook, LA, Harris, …) for chunked fetching
 
 ## Notebooks
 
-Located in `cities/<city>/model.ipynb`. Each follows a pattern:
-1. Fetch/load parcel data from county GIS
-2. Validate against official tax base data
-3. Classify parcels (TIF, exempt, city-taxable)
-4. Categorize property types
-5. Run split-rate model(s)
-6. Visualize by category (bar charts, butterfly charts, scatter plots)
-7. Merge Census data for equity analysis (income/minority quintiles)
-8. `save_standard_export()` → `create_city_report()`
-
-Data stored locally in `cities/<city>/data/` as geoparquet files (gitignored).
+Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `.claude/skills/build-notebook.md`:
+1. Imports, constants, `.env` load
+2. Fetch/load parcel data from county GIS (cached in `cities/<city>/data/`)
+3. Classify parcels (exempt flags, property categories) and validate against official tax base data
+4. Rebuild the current tax and check against the official revenue figure
+5. Run the split-rate or abatement model
+6. Optional exploration charts
+7. Census join → `save_standard_export()` → `create_city_report()` (exact closing pattern — do not modify)
 
 ## Documentation
 
 - `docs/LVT_MODELING_GUIDE.md` — step-by-step guide for adding a new city
-- `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor)
+- `docs/LVT_LEGAL_DECISIONING_GUIDE.md` — legal framework behind the legality-analyzer skill
+- `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 
 ## Code Style
 
@@ -132,4 +146,4 @@ Data stored locally in `cities/<city>/data/` as geoparquet files (gitignored).
 
 ## Data Files
 
-All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each example city stores scraped data locally in `examples/data/<city>/`. The `data_scrape` flag in notebooks controls whether to fetch fresh data or load from cached files.
+All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each city's scraped data is cached locally in `cities/<city>/data/`; notebooks auto-detect cached files and skip re-scraping when a recent file exists. Standard exports land in `analysis/data/` and reports in `analysis/reports/` (both gitignored).
