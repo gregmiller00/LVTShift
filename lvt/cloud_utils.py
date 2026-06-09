@@ -1,16 +1,7 @@
 import requests
 import pandas as pd
-from io import BytesIO
-from datetime import datetime
-import json
-import time
 from shapely.geometry import Polygon
 import geopandas as gpd
-from azure.storage.blob import BlobServiceClient
-import requests
-import geopandas as gpd
-from shapely.geometry import Polygon
-from pyproj import CRS
 
 def get_layer_crs(base_url, dataset_name, layer_id=0, verbose=True):
     """Fetch layer metadata to infer spatial reference."""
