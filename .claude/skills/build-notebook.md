@@ -37,13 +37,13 @@ The `STATE_FIPS + COUNTY_FIPS` combined string is the FIPS code passed to Census
 
 ## Kernelspec
 
-The notebook must use the `cle-venv-new` kernel. Set this in the notebook metadata:
+The notebook must use the standard `python3` kernel (installed with `ipykernel`, present in any environment that has the repo requirements). Set this in the notebook metadata:
 
 ```json
 "kernelspec": {
-  "display_name": "cle-venv-new",
+  "display_name": "Python 3",
   "language": "python",
-  "name": "cle-venv-new"
+  "name": "python3"
 }
 ```
 
@@ -316,10 +316,10 @@ for _col in _census_cols:
 
 **Import path**: Always `sys.path.insert(0, '../..')` from `cities/<city>/model.ipynb`.
 
-**Kernel**: Always `cle-venv-new`. Execute with:
+**Kernel**: Always `python3`. Execute with:
 ```bash
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   model.ipynb
 ```

@@ -93,7 +93,7 @@ mechanics — don't force it into the wrong row.
 cd /path/to/LVTShift/cities/<city> && \
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   model.ipynb 2>&1
 ```
 

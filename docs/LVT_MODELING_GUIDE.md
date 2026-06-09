@@ -151,13 +151,13 @@ Census charts are generated only when block-group income and minority data are a
 cd cities/<city> && \
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   model.ipynb 2>&1
 
 # Re-run cross-city comparison
 cd analysis && \
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=300 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   cross_city.ipynb 2>&1
 ```

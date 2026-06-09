@@ -121,7 +121,7 @@ print("Done.")
 cd /path/to/LVTShift/cities/<city> && \
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   model.ipynb 2>&1
 ```
 
@@ -140,7 +140,7 @@ Re-run `analysis/cross_city.ipynb` to include the new city:
 cd /path/to/LVTShift/analysis && \
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=300 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   cross_city.ipynb 2>&1
 ```
 
