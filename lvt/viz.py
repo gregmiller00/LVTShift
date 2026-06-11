@@ -927,6 +927,7 @@ _QUINTILE_GREENS: List[str] = ['#c8e6c9', '#81c784', '#4caf50', '#2e7d32', '#1b5
 # Default "residential" categories used for census quintile charts
 _RESIDENTIAL_CATEGORIES: List[str] = [
     'Single Family Residential',
+    'Single Family Residential ($500k+)',
     'Small Multi-Family (2-4 units)',
     'Large Multi-Family (5+ units)',
     'Other Residential',
