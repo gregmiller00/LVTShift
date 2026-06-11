@@ -227,7 +227,7 @@ Census charts are generated when block-group income and minority data are availa
 
 Complete models, each with a notebook, standardized export, and report:
 
-Baltimore MD, Bellingham WA, Bryan TX, Charlottesville VA, Cincinnati OH, Cleveland OH, College Station TX, Fort Collins CO, Greeley CO, Highlands Ranch CO, Minneapolis MN, Pittsburgh PA, Pueblo CO, Rochester NY, Seattle WA, South Bend IN, Spokane WA, St. Paul MN, and Syracuse NY.
+Baltimore MD (citywide, plus a one-mile rail transit-zone variant), Bellingham WA, Bryan TX, Charlottesville VA, Cincinnati OH, Cleveland OH, College Station TX, Fort Collins CO, Greeley CO, Highlands Ranch CO, Minneapolis MN, Pittsburgh PA, Pueblo CO, Rochester NY, Seattle WA, South Bend IN, Spokane WA, St. Paul MN, and Syracuse NY.
 
 A few more (Denver, Morgantown, Scranton) are in progress. Each city's methodology — which levies were modeled, how exemptions were treated, what the land/improvement split rests on — is documented in its notebook and can be audited with `/explain-model <city>`.
 
