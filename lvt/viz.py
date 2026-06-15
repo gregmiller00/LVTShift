@@ -1389,6 +1389,16 @@ def create_city_report(
     model_t   = (str(df['model_type'].iloc[0])
                  if 'model_type' in df.columns and len(df) else None)
 
+    # Per-city metrics summary — writes metrics_summary.md + metrics_<city>.csv next to the
+    # charts. Wrapped so a metrics failure can never break the (already-saved) report.
+    metrics: dict = {}
+    try:
+        from lvt.metrics import compute_city_metrics
+        metrics = compute_city_metrics(df, city, output_dir)
+        charts_saved.append(os.path.join(city_dir, 'metrics_summary.md'))
+    except Exception as e:
+        print(f"metrics summary skipped: {e}")
+
     return {
         'row_count': len(df),
         'current_revenue': current_rev,
@@ -1398,6 +1408,7 @@ def create_city_report(
         'improvement_millage': imp_mill,
         'model_type': model_t,
         'charts_saved': charts_saved,
+        'metrics': metrics,
     }
 
 
