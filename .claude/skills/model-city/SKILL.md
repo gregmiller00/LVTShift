@@ -127,10 +127,21 @@ jupyter nbconvert --to notebook --execute --inplace \
 
 ---
 
-### Step 5 — Validate
+### Step 5 — Validate & interpret the results
 → See `validate.md`
 
-Check revenue match, distribution sanity, census coverage, and PNG output.
+Run all **five** gates: revenue match, distribution sanity, census coverage, PNG output, and —
+critically — **Gate 5, the artifact scan**. Gates 1–4 confirm the model *ran*; Gate 5 confirms the
+results are *believable*. Do not report a city as done by reading "it executed" — open the category
+table and interpret it against economic priors. The recurring canary is a category (or a few) that
+looks off: distinct property types pinned at the same extreme value (commercial/parking sitting at the
+same increase as vacant land), an implausible land/building split, or a taxable base that doesn't
+reconcile to a known control. When a canary fires, trace it to the parcel level, decide artifact vs.
+real, **fix the source data and document the fix**, then re-run. A surprising result you can't explain
+is not a finding — it's a bug.
+
+Fully-exempt parcels are held out of the solver and **excluded from the export and report charts**
+(they carry no signal); report them by count, not as an "Exempt" category.
 
 ---
 

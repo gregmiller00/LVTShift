@@ -1284,6 +1284,23 @@ def create_city_report(
     res_cats = census_categories if census_categories is not None else _RESIDENTIAL_CATEGORIES
 
     # ------------------------------------------------------------------
+    # Exclude fully-exempt parcels from every chart.
+    # ------------------------------------------------------------------
+    # Fully-exempt parcels are held out of the revenue-neutral solver and carry no
+    # signal (current = new = $0, 0% change). Plotting them adds a meaningless "Exempt"
+    # category bar and a spike at 0% in the distribution, which obscures the real
+    # incidence. They are excluded from the report here (and reported by count instead).
+    n_total = len(df)
+    if 'is_fully_exempt' in df.columns:
+        df = df[df['is_fully_exempt'] != 1].copy()
+    if cat_col in df.columns:
+        df = df[df[cat_col].astype(str) != 'Exempt'].copy()
+    n_excluded = n_total - len(df)
+    if n_excluded:
+        print(f"create_city_report: excluded {n_excluded:,} fully-exempt parcels "
+              f"({n_total:,} → {len(df):,} modeled).")
+
+    # ------------------------------------------------------------------
     # Chart 1: property category impact (median %)
     # ------------------------------------------------------------------
     cat_summary = calculate_category_tax_summary(
