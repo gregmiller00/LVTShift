@@ -309,6 +309,14 @@ create_city_report(out_df, CITY_NAME, show=False)
 print("Done.")
 ```
 
+> **Metrics summary (automatic).** `create_city_report` also calls
+> `lvt.metrics.compute_city_metrics`, which writes `metrics_summary.md` and
+> `metrics_<city>.csv` into `analysis/reports/<city>/` and returns the metrics in the report
+> dict. No extra notebook code is needed. The summary reports the full modeled tax base, the
+> total dollars changed (Σ\|new − current\|) as a share of the modeled levy, and the value of
+> vacant + underdeveloped land (improvement ratio <10% / 10-25% / 25-50%) as a share of the
+> base. Roll up across cities with `lvt.metrics.rollup_city_metrics()`.
+
 ---
 
 ## Common Pitfalls
