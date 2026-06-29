@@ -45,12 +45,13 @@ pattern at the top of the file.
 
 ## Architecture
 
-Five core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
+Six core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
 
 ```
 lvt/cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
 lvt/census_utils.py    → Fetch Census demographics, spatial join to parcels
-lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions)
+lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions) — rate shifts
+lvt/reassessment.py    → Revenue-neutral reassessment — base shifts (single + multi-district, decomposition)
 lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
 lvt/viz.py             → Scatter plots, quintile analysis, demographic charts
 ```
