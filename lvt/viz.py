@@ -1713,3 +1713,117 @@ def median_change_by_category_chart(
     ax.grid(axis="x", alpha=0.3)
     plt.tight_layout()
     return data
+
+
+def reassessment_equity_chart(
+    breakdown_df: pd.DataFrame,
+    group_col: str,
+    *,
+    change_col: str = "median_change_pct",
+    winners_col: str = "pct_winners",
+    count_col: str = "n",
+    cod_col: str = "cod",
+    title: str = "Reassessment impact by group",
+    figsize: Tuple[float, float] = (9, 5),
+    ax: Optional[plt.Axes] = None,
+    pay_less_color: str = "#4C78A8",
+    pay_more_color: str = "#E45756",
+    cod_color: str = "#555555",
+    cod_threshold: float = 20.0,
+    save_path: Optional[str] = None,
+    show: bool = False,
+) -> pd.DataFrame:
+    """
+    Bar chart of a reassessment's median tax change across an ordinal stratum
+    (income quintile or racial-composition band), from a `reassessment_equity`
+    breakdown table.
+
+    Bars are blue where the median bill falls (pay less) and red where it rises
+    (pay more); each bar is annotated with the share of parcels that win. When the
+    breakdown carries the current base's `cod` per stratum (i.e.
+    `reassessment_equity` was called with `ratio_cols`), the assessment-uniformity
+    gradient is overlaid on a secondary axis with the IAAO threshold — so tax-shift
+    fairness and assessment-quality fairness read together.
+
+    Parameters
+    ----------
+    breakdown_df : pd.DataFrame
+        One breakdown table from `lvt.reassessment.reassessment_equity` (e.g.
+        `["by_income_quintile"]`). Rows are already in stratum order.
+    group_col : str
+        Stratum label column (e.g. "income_quintile", "minority_band").
+    change_col, winners_col, count_col, cod_col : str
+        Columns for the median % change, win share, parcel count, and (optional)
+        per-stratum COD.
+    title : str
+    figsize, ax : matplotlib.
+    pay_less_color, pay_more_color, cod_color : str
+        Bar colors by sign of the median change, and the COD line color.
+    cod_threshold : float, default 20.0
+        IAAO COD acceptability line drawn on the secondary axis when COD is shown.
+    save_path : str, optional
+        If given, the figure is written here.
+    show : bool, default False
+        If True, calls `plt.show()`.
+
+    Returns
+    -------
+    pd.DataFrame
+        The table actually rendered.
+    """
+    data = breakdown_df.copy()
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    if len(data) == 0:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path)
+        if show:
+            plt.show()
+        return data
+
+    x = np.arange(len(data))
+    vals = data[change_col].astype(float).to_numpy()
+    colors = [pay_more_color if v > 0 else pay_less_color for v in vals]
+    ax.bar(x, vals, color=colors, alpha=0.92, width=0.7)
+    ax.axhline(0, color="black", linewidth=0.6)
+    ax.set_xticks(x)
+    ax.set_xticklabels(data[group_col].astype(str))
+    ax.set_ylabel("Median tax change (%)")
+    ax.set_title(title)
+    ax.grid(axis="y", alpha=0.3)
+    ax.margins(y=0.2)
+
+    span = float(np.nanmax(np.abs(vals))) or 1.0
+    for xi, v, row in zip(x, vals, data.itertuples(index=False)):
+        win = getattr(row, winners_col, None)
+        n = getattr(row, count_col, None)
+        parts = []
+        if win is not None and win == win:
+            parts.append(f"{float(win):.0f}% win")
+        if n is not None and n == n:
+            parts.append(f"n={int(n):,}")
+        if parts:
+            off = span * 0.04
+            ax.text(xi, v + (off if v >= 0 else -off), "\n".join(parts),
+                    ha="center", va="bottom" if v >= 0 else "top", fontsize=8)
+
+    if cod_col in data.columns and data[cod_col].notna().any():
+        ax2 = ax.twinx()
+        ax2.plot(x, data[cod_col].astype(float), color=cod_color, marker="o", linewidth=1.6)
+        ax2.axhline(cod_threshold, color=cod_color, linewidth=0.8, linestyle="dotted")
+        ax2.set_ylabel("Current-base COD (1994 assessments)")
+        ax2.set_ylim(bottom=0)
+        ax2.text(x[-1], cod_threshold, f" IAAO ≤{cod_threshold:.0f}",
+                 color=cod_color, fontsize=8, va="bottom", ha="right")
+        ax2.grid(False)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+    if show:
+        plt.show()
+    return data

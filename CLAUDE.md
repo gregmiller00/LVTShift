@@ -70,7 +70,7 @@ Six core modules live in the `lvt/` package, used from Jupyter notebooks in `cit
 lvt/cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
 lvt/census_utils.py    → Fetch Census demographics, spatial join to parcels
 lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions) — rate shifts
-lvt/reassessment.py    → Revenue-neutral reassessment — base shifts (single + multi-district, decomposition)
+lvt/reassessment.py    → Revenue-neutral reassessment — base shifts (single + multi-district, decomposition) + IAAO ratio-study & equity metrics
 lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
 lvt/transit_utils.py   → GTFS feeds, routed walk-shed isochrones, OSM parking analysis
 lvt/viz.py             → Scatter plots, quintile analysis, demographic charts, city report

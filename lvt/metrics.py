@@ -185,7 +185,7 @@ def _write_markdown(city, model_type, n, tax_base, land_base, imp_base, levy, gr
              "chart's \"Vacant Land\" category, which also counts a few nominally-vacant-use parcels "
              "carrying a small structure (those fall in the <10% bucket here). "
              "\"% of $ changed\" = each bucket's share of the gross dollars redistributed.*")
-    with open(path, 'w') as fh:
+    with open(path, 'w', encoding='utf-8') as fh:
         fh.write("\n".join(L) + "\n")
 
 
