@@ -81,6 +81,20 @@ Back-calculate millage from observed tax bills. See `model-policy.md` Part B4.
 
 Model homestead and non-homestead parcels with separate millage rates and separate revenue neutrality. See `model-policy.md` Part B5.
 
+### Revenue-Neutral Reassessment (base shift, not rate shift)
+
+Hold revenue constant while updating the *assessed values* — e.g. 1994 CAMA → current AVM — and roll the flat millage back, rather than changing the rate structure. This is the "who wins/loses from a reassessment" baseline that an LVT shift then layers on top. Use `lvt.reassessment`. Values come from the caller (an AVM, market sales, or a manual factor); value *generation* lives in the sibling `berks_open_avmkit` project, not here.
+
+```python
+from lvt.reassessment import model_revenue_neutral_reassessment
+flat_millage, new_revenue, df = model_revenue_neutral_reassessment(
+    df, new_value_col='avm_value', old_value_col='assr_market_value',
+    current_millage=CITY_MILLAGE, exemption_flag_col='full_exmp',
+)
+```
+
+For overlapping taxing districts (county / municipality / school), use `model_multi_district_reassessment` — each district is rolled back to revenue neutrality *within itself* (the Pennsylvania anti-windfall method, 53 Pa.C.S. § 8823), and a parcel's bill is summed across the districts it belongs to. To separate the reassessment effect from an LVT shift, stack `model_split_rate_tax` on the new base and call `decompose_reassessment_and_lvt`. Worked example: `cities/reading/model_reassessment.ipynb`; the real Reading decomposition runs in `cities/reading/model_lycd.ipynb` Section 7b.
+
 ---
 
 ## Property Categories
