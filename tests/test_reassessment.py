@@ -297,6 +297,31 @@ def test_reassessment_equity_value_decile():
     assert "by_value_decile" not in reassessment_equity(df)
 
 
+def test_reassessment_equity_bootstrap_ci():
+    n = 400
+    rng = np.random.default_rng(5)
+    income = rng.uniform(20_000, 120_000, n)
+    tax_change = np.where(income > 70_000, 50.0, -50.0)
+    df = pd.DataFrame({
+        "tax_change": tax_change,
+        "tax_change_pct": tax_change / 5.0,
+        "median_income": income,
+        "minority_pct": rng.uniform(0, 100, n),
+    })
+    iq = reassessment_equity(df, n_boot=200, random_state=0)["by_income_quintile"]
+    for c in ["pct_winners_lo", "pct_winners_hi", "median_change_pct_lo", "median_change_pct_hi"]:
+        assert c in iq.columns
+    # interval is ordered and brackets the point estimate
+    assert (iq["pct_winners_lo"] <= iq["pct_winners_hi"]).all()
+    assert (iq["pct_winners_lo"] <= iq["pct_winners"]).all()
+    assert (iq["pct_winners"] <= iq["pct_winners_hi"]).all()
+    # reproducible with a fixed seed
+    iq2 = reassessment_equity(df, n_boot=200, random_state=0)["by_income_quintile"]
+    pd.testing.assert_frame_equal(iq, iq2)
+    # off by default
+    assert "pct_winners_lo" not in reassessment_equity(df)["by_income_quintile"].columns
+
+
 def test_reassessment_equity_chart_smoke(tmp_path):
     import matplotlib
     matplotlib.use("Agg")

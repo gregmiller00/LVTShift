@@ -728,6 +728,9 @@ def reassessment_equity(
     minority_labels: Optional[Sequence[str]] = None,
     value_col: Optional[str] = None,
     n_value_quantiles: int = 10,
+    n_boot: int = 0,
+    ci: float = 0.95,
+    random_state: Optional[int] = None,
     ratio_cols: Optional[Tuple[str, str]] = None,
     exclude_mask: Optional[pd.Series] = None,
 ) -> Dict[str, pd.DataFrame]:
@@ -773,6 +776,15 @@ def reassessment_equity(
         <= 0 / NaN are dropped from it.
     n_value_quantiles : int, default 10
         Number of value quantiles (10 = deciles).
+    n_boot : int, default 0
+        If > 0, bootstrap each group `n_boot` times and add confidence-interval
+        columns for the win share and median change — so thin strata carry a
+        visible uncertainty range rather than a falsely precise point. Off by
+        default (the resampling is the only non-trivial cost).
+    ci : float, default 0.95
+        Confidence level for the bootstrap interval (0.95 = 2.5th/97.5th pct).
+    random_state : int, optional
+        Seed for the bootstrap RNG (reproducible CIs).
     ratio_cols : (str, str), optional
         ``(assessed_col, market_col)`` to also report per-stratum ``median_ratio``
         and ``cod`` of the current base.
@@ -786,7 +798,9 @@ def reassessment_equity(
         ``"by_value_decile"`` when ``value_col`` is given). Each breakdown row:
         the group label, ``n``, ``pct_winners``, ``median_change_pct``,
         ``mean_change_pct``, ``total_change_dollars`` (plus ``median_ratio`` /
-        ``cod`` when ``ratio_cols`` is given).
+        ``cod`` when ``ratio_cols`` is given, and ``pct_winners_lo`` /
+        ``pct_winners_hi`` / ``median_change_pct_lo`` / ``median_change_pct_hi``
+        when ``n_boot`` > 0).
     """
     if exclude_mask is not None:
         keep = ~exclude_mask.reindex(df.index, fill_value=False).astype(bool)
@@ -797,6 +811,7 @@ def reassessment_equity(
     change_dollars = _coerce_numeric(df[change_col]) if has_dollars else pd.Series(np.nan, index=df.index)
     change_pct = _coerce_numeric(df[change_pct_col]) if change_pct_col in df.columns else pd.Series(np.nan, index=df.index)
     win = (change_dollars < 0) if has_dollars else (change_pct < 0)
+    _boot_rng = np.random.default_rng(random_state) if n_boot and n_boot > 0 else None
 
     def _summarize(groups: pd.Series, label_col: str) -> pd.DataFrame:
         if isinstance(groups.dtype, pd.CategoricalDtype):
@@ -820,6 +835,18 @@ def reassessment_equity(
                 rs = assessment_ratio_stats(df.loc[idx], ratio_cols[0], ratio_cols[1])
                 row["median_ratio"] = round(rs["median_ratio"], 3) if rs["median_ratio"] == rs["median_ratio"] else float("nan")
                 row["cod"] = round(rs["cod"], 1) if rs["cod"] == rs["cod"] else float("nan")
+            if _boot_rng is not None:
+                k = len(idx)
+                wins = win.loc[idx].to_numpy(dtype=float)
+                pcts = change_pct.loc[idx].to_numpy(dtype=float)
+                samp = _boot_rng.integers(0, k, size=(int(n_boot), k))
+                boot_win = wins[samp].mean(axis=1) * 100.0
+                boot_med = np.nanmedian(pcts[samp], axis=1)
+                lo_q, hi_q = (1 - ci) / 2 * 100, (1 + ci) / 2 * 100
+                row["pct_winners_lo"] = round(float(np.percentile(boot_win, lo_q)), 1)
+                row["pct_winners_hi"] = round(float(np.percentile(boot_win, hi_q)), 1)
+                row["median_change_pct_lo"] = round(float(np.nanpercentile(boot_med, lo_q)), 1)
+                row["median_change_pct_hi"] = round(float(np.nanpercentile(boot_med, hi_q)), 1)
             rows.append(row)
         return pd.DataFrame(rows)
 
