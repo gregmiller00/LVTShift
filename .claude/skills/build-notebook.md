@@ -37,13 +37,13 @@ The `STATE_FIPS + COUNTY_FIPS` combined string is the FIPS code passed to Census
 
 ## Kernelspec
 
-The notebook must use the `cle-venv-new` kernel. Set this in the notebook metadata:
+The notebook must use the standard `python3` kernel (installed with `ipykernel`, present in any environment that has the repo requirements). Set this in the notebook metadata:
 
 ```json
 "kernelspec": {
-  "display_name": "cle-venv-new",
+  "display_name": "Python 3",
   "language": "python",
-  "name": "cle-venv-new"
+  "name": "python3"
 }
 ```
 
@@ -180,28 +180,27 @@ assert abs(gap_pct) < 5.0, f"Revenue gap {gap_pct:.1f}% exceeds threshold"
 ## Section 5 — Split-Rate Model
 
 ```python
-# Exclude fully-exempt parcels from reform
-taxable = gdf[gdf['full_exmp'] == 0].copy()
+# Exclude fully-exempt parcels from the reform — AND from the modeled output.
+# They carry no signal (current = new = $0): plotting them adds a meaningless "Exempt"
+# bar and a spike at 0% in the distribution. Hold them out of the solver and do NOT add
+# them back, so they never appear in the export or the report charts. Report them by
+# count. (create_city_report also guards against any stray exempt rows.)
+n_exempt = int((gdf['full_exmp'] == 1).sum())
+gdf = gdf[gdf['full_exmp'] == 0].copy()
 
-land_millage, improvement_millage, new_revenue, taxable = model_split_rate_tax(
-    df=taxable,
+land_millage, improvement_millage, new_revenue, gdf = model_split_rate_tax(
+    df=gdf,
     land_value_col='taxable_land_value',
     improvement_value_col='taxable_improvement_value',
-    current_revenue=taxable['current_tax'].sum(),
+    current_revenue=gdf['current_tax'].sum(),
     land_improvement_ratio=LAND_IMPROVEMENT_RATIO,
 )
 
-# Recombine exempt parcels (their new_tax = current_tax = 0)
-exempt = gdf[gdf['full_exmp'] == 1].copy()
-exempt['new_tax'] = 0.0
-exempt['tax_change'] = 0.0
-exempt['tax_change_pct'] = 0.0
-gdf = pd.concat([taxable, exempt]).sort_index()
-
+print(f"Held out {n_exempt:,} fully-exempt parcels (excluded from model, export, and charts).")
 print(f"Land millage: {land_millage:.4f}   Improvement millage: {improvement_millage:.4f}")
-print(f"Revenue check: ${new_revenue:,.0f} (should equal ${taxable['current_tax'].sum():,.0f})")
+print(f"Revenue check: ${new_revenue:,.0f}")
 
-# Category summary
+# Category summary (modeled parcels only)
 category_summary = calculate_category_tax_summary(
     df=gdf,
     category_col='PROPERTY_CATEGORY',
@@ -210,6 +209,18 @@ category_summary = calculate_category_tax_summary(
 )
 print_category_tax_summary(category_summary, title=f"{CITY_NAME} — 4:1 Split-Rate Tax Impact")
 ```
+
+> **Norm — fully-exempt parcels are excluded from the modeled output.** They are held out
+> of the revenue-neutral solver and dropped here, so they do not appear as an "Exempt"
+> category in the report or as a 0%-change spike in the distribution. Keep their count for
+> the validation summary. If a city's data needs exempt parcels retained for some reason,
+> say so explicitly in a markdown cell and note why.
+
+> **Before moving on — read the results (artifact scan).** Do not treat "it ran" as "it's
+> right." Print the category table and interpret it against economic priors *now* — see
+> `validate.md` **Gate 5**. The most common canary is a set of distinct categories sharing a
+> near-identical, extreme median (commercial/parking pinned at the same value as vacant
+> land), which usually means missing/placeholder building values rather than a real result.
 
 ---
 
@@ -298,6 +309,14 @@ create_city_report(out_df, CITY_NAME, show=False)
 print("Done.")
 ```
 
+> **Metrics summary (automatic).** `create_city_report` also calls
+> `lvt.metrics.compute_city_metrics`, which writes `metrics_summary.md` and
+> `metrics_<city>.csv` into `analysis/reports/<city>/` and returns the metrics in the report
+> dict. No extra notebook code is needed. The summary reports the full modeled tax base, the
+> total dollars changed (Σ\|new − current\|) as a share of the modeled levy, and the value of
+> vacant + underdeveloped land (improvement ratio <10% / 10-25% / 25-50%) as a share of the
+> base. Roll up across cities with `lvt.metrics.rollup_city_metrics()`.
+
 ---
 
 ## Common Pitfalls
@@ -316,10 +335,10 @@ for _col in _census_cols:
 
 **Import path**: Always `sys.path.insert(0, '../..')` from `cities/<city>/model.ipynb`.
 
-**Kernel**: Always `cle-venv-new`. Execute with:
+**Kernel**: Always `python3`. Execute with:
 ```bash
 jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.timeout=600 \
-  --ExecutePreprocessor.kernel_name=cle-venv-new \
+  --ExecutePreprocessor.kernel_name=python3 \
   model.ipynb
 ```

@@ -927,6 +927,7 @@ _QUINTILE_GREENS: List[str] = ['#c8e6c9', '#81c784', '#4caf50', '#2e7d32', '#1b5
 # Default "residential" categories used for census quintile charts
 _RESIDENTIAL_CATEGORIES: List[str] = [
     'Single Family Residential',
+    'Single Family Residential (1/4+ acre)',
     'Small Multi-Family (2-4 units)',
     'Large Multi-Family (5+ units)',
     'Other Residential',
@@ -1283,6 +1284,23 @@ def create_city_report(
     res_cats = census_categories if census_categories is not None else _RESIDENTIAL_CATEGORIES
 
     # ------------------------------------------------------------------
+    # Exclude fully-exempt parcels from every chart.
+    # ------------------------------------------------------------------
+    # Fully-exempt parcels are held out of the revenue-neutral solver and carry no
+    # signal (current = new = $0, 0% change). Plotting them adds a meaningless "Exempt"
+    # category bar and a spike at 0% in the distribution, which obscures the real
+    # incidence. They are excluded from the report here (and reported by count instead).
+    n_total = len(df)
+    if 'is_fully_exempt' in df.columns:
+        df = df[df['is_fully_exempt'] != 1].copy()
+    if cat_col in df.columns:
+        df = df[df[cat_col].astype(str) != 'Exempt'].copy()
+    n_excluded = n_total - len(df)
+    if n_excluded:
+        print(f"create_city_report: excluded {n_excluded:,} fully-exempt parcels "
+              f"({n_total:,} → {len(df):,} modeled).")
+
+    # ------------------------------------------------------------------
     # Chart 1: property category impact (median %)
     # ------------------------------------------------------------------
     cat_summary = calculate_category_tax_summary(
@@ -1388,6 +1406,16 @@ def create_city_report(
     model_t   = (str(df['model_type'].iloc[0])
                  if 'model_type' in df.columns and len(df) else None)
 
+    # Per-city metrics summary — writes metrics_summary.md + metrics_<city>.csv next to the
+    # charts. Wrapped so a metrics failure can never break the (already-saved) report.
+    metrics: dict = {}
+    try:
+        from lvt.metrics import compute_city_metrics
+        metrics = compute_city_metrics(df, city, output_dir)
+        charts_saved.append(os.path.join(city_dir, 'metrics_summary.md'))
+    except Exception as e:
+        print(f"metrics summary skipped: {e}")
+
     return {
         'row_count': len(df),
         'current_revenue': current_rev,
@@ -1397,6 +1425,7 @@ def create_city_report(
         'improvement_millage': imp_mill,
         'model_type': model_t,
         'charts_saved': charts_saved,
+        'metrics': metrics,
     }
 
 

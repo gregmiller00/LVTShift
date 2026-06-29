@@ -172,7 +172,7 @@ def get_census_blockgroups_shapefile_chunked(fips_code: str, max_retries: int = 
 
     # Now fetch block groups for each tract
     all_block_groups = []
-    bg_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/2/query"
+    bg_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/1/query"
     
     for i, tract in enumerate(tract_numbers):
         retry_count = 0
@@ -278,7 +278,7 @@ def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
         return get_census_blockgroups_shapefile_chunked(fips_code)
 
     # TIGERweb REST API endpoint
-    base_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/2/query"
+    base_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/1/query"
     
     # Query parameters
     params = {
@@ -439,86 +439,6 @@ def get_census_data_with_boundaries(
     )
     
     return census_data, census_boundaries
-
-def enrich_shapefile_with_census(
-    shapefile: Union[str, gpd.GeoDataFrame],
-    fips_code: str,
-    year: int = 2022,
-    api_key: str = None
-) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """
-    Takes a shapefile (or GeoDataFrame) and enriches it with Census Block Group data.
-    Also returns the Census Block Group data separately.
-    
-    Args:
-        shapefile (Union[str, gpd.GeoDataFrame]): Either a path to a shapefile or a GeoDataFrame
-        fips_code (str): 5-digit FIPS code (state + county)
-        year (int): Census year to query (default: 2022)
-        api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
-    
-    Returns:
-        Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-            - Original shapefile enriched with Census Block Group data
-            - Census Block Group boundaries with demographic data
-            
-    Raises:
-        TypeError: If inputs have wrong types
-        ValueError: If inputs have invalid values
-        requests.RequestException: If API requests fail
-        FileNotFoundError: If shapefile path is invalid
-    """
-    # Input validation
-    if not isinstance(fips_code, str):
-        raise TypeError("fips_code must be a string")
-    if not isinstance(year, int):
-        raise TypeError("year must be an integer")
-    if len(fips_code) != 5:
-        raise ValueError("fips_code must be 5 digits (state + county)")
-    if not api_key:
-        raise ValueError("Census API key must be provided")
-
-    # Load the shapefile if string path provided
-    if isinstance(shapefile, str):
-        try:
-            gdf = gpd.read_file(shapefile)
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to read shapefile at {shapefile}: {str(e)}")
-    elif isinstance(shapefile, gpd.GeoDataFrame):
-        gdf = shapefile.copy()
-    else:
-        raise TypeError("shapefile must be either a file path (str) or a GeoDataFrame")
-    
-    # Check if the GeoDataFrame has a CRS and set one if it doesn't
-    if gdf.crs is None:
-        raise ValueError("Input GeoDataFrame must have a coordinate reference system (CRS) defined. "
-                         "Use gdf.set_crs() to set a CRS before calling this function.")
-
-    # Get census data and boundaries
-    census_data, census_boundaries = get_census_data_with_boundaries(
-        fips_code=fips_code,
-        year=year,
-        api_key=api_key
-    )
-    
-    # Ensure census boundaries have a CRS
-    if census_boundaries.crs is None:
-        # Set a default CRS (EPSG:4326 - WGS84) if none exists
-        census_boundaries = census_boundaries.set_crs("EPSG:4326")
-
-    # Match shapefile to census block groups
-    # Use a list of columns to keep from census_boundaries to avoid duplicates
-    census_cols_to_keep = ['std_geoid', 'median_income', 'total_pop', 'white_pop', 
-                          'black_pop', 'hispanic_pop']
-    
-    # First perform the spatial join
-    enriched_gdf = match_to_census_blockgroups(
-        gdf=gdf,
-        census_gdf=census_boundaries[['geometry', 'std_geoid'] + 
-                                    [col for col in census_cols_to_keep if col != 'std_geoid']],
-        join_type="left"
-    )
-
-    return enriched_gdf, census_boundaries
 
 def get_census_blockgroups_from_ftp(fips_code: str, year: int = 2022) -> gpd.GeoDataFrame:
     """
