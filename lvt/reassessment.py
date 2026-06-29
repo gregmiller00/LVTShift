@@ -726,6 +726,8 @@ def reassessment_equity(
     n_income_quantiles: int = 5,
     minority_bins: Sequence[float] = (0, 10, 25, 50, 75, 100),
     minority_labels: Optional[Sequence[str]] = None,
+    value_col: Optional[str] = None,
+    n_value_quantiles: int = 10,
     ratio_cols: Optional[Tuple[str, str]] = None,
     exclude_mask: Optional[pd.Series] = None,
 ) -> Dict[str, pd.DataFrame]:
@@ -764,6 +766,13 @@ def reassessment_equity(
         majority-minority stratum.
     minority_labels : sequence of str, optional
         Band labels (len == len(minority_bins) - 1). Default ``"lo-hi%"``.
+    value_col : str, optional
+        If given, also emit a ``by_value_decile`` breakdown — the vertical equity
+        of the shift across the value distribution (does the reassessment cut
+        cheap or expensive parcels harder). D1 = lowest value; rows with value
+        <= 0 / NaN are dropped from it.
+    n_value_quantiles : int, default 10
+        Number of value quantiles (10 = deciles).
     ratio_cols : (str, str), optional
         ``(assessed_col, market_col)`` to also report per-stratum ``median_ratio``
         and ``cod`` of the current base.
@@ -773,8 +782,9 @@ def reassessment_equity(
     Returns
     -------
     dict of pandas.DataFrame
-        ``{"overall", "by_income_quintile", "by_minority_band"}``. Each breakdown
-        row: the group label, ``n``, ``pct_winners``, ``median_change_pct``,
+        ``{"overall", "by_income_quintile", "by_minority_band"}`` (plus
+        ``"by_value_decile"`` when ``value_col`` is given). Each breakdown row:
+        the group label, ``n``, ``pct_winners``, ``median_change_pct``,
         ``mean_change_pct``, ``total_change_dollars`` (plus ``median_ratio`` /
         ``cod`` when ``ratio_cols`` is given).
     """
@@ -835,6 +845,19 @@ def reassessment_equity(
         min_groups.loc[min_valid] = mc.astype(object)
         min_groups = pd.Series(pd.Categorical(min_groups, categories=list(minority_labels), ordered=True), index=df.index)
 
+    # Value deciles (vertical equity of the shift) — only when value_col is given
+    val_groups = None
+    if value_col is not None:
+        val = _coerce_numeric(df[value_col])
+        val_valid = keep & val.notna() & (val > 0)
+        val_groups = pd.Series(index=df.index, dtype="object")
+        if int(val_valid.sum()) >= n_value_quantiles:
+            codes = pd.qcut(val[val_valid], n_value_quantiles, labels=False, duplicates="drop")
+            nv = int(codes.max()) + 1
+            val_labels = [f"D{i + 1}" for i in range(nv)]
+            val_groups.loc[val_valid] = codes.map(lambda c: f"D{int(c) + 1}")
+            val_groups = pd.Series(pd.Categorical(val_groups, categories=val_labels, ordered=True), index=df.index)
+
     overall = pd.DataFrame([{
         "group": "all",
         "n": int(keep.sum()),
@@ -844,8 +867,11 @@ def reassessment_equity(
         "total_change_dollars": float(change_dollars[keep].sum()) if has_dollars else float("nan"),
     }])
 
-    return {
+    result = {
         "overall": overall,
         "by_income_quintile": _summarize(inc_groups, "income_quintile"),
         "by_minority_band": _summarize(min_groups, "minority_band"),
     }
+    if val_groups is not None:
+        result["by_value_decile"] = _summarize(val_groups, "value_decile")
+    return result

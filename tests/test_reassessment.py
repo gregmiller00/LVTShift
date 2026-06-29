@@ -274,6 +274,29 @@ def test_reassessment_equity_with_ratio_cols():
     assert (iq["cod"].dropna() < 1e-6).all()
 
 
+def test_reassessment_equity_value_decile():
+    # Vertical equity of the shift: expensive parcels lose, cheap ones win.
+    n = 300
+    rng = np.random.default_rng(4)
+    value = rng.uniform(50_000, 500_000, n)
+    tax_change = np.where(value > 275_000, 80.0, -40.0)
+    df = pd.DataFrame({
+        "tax_change": tax_change,
+        "tax_change_pct": tax_change / 8.0,
+        "median_income": rng.uniform(20_000, 120_000, n),
+        "minority_pct": rng.uniform(0, 100, n),
+        "avm_value": value,
+    })
+    out = reassessment_equity(df, value_col="avm_value")
+    assert "by_value_decile" in out
+    vd = out["by_value_decile"]
+    assert len(vd) == 10 and vd["n"].sum() == n
+    # lowest-value decile wins more than highest-value decile
+    assert vd.iloc[0]["pct_winners"] > vd.iloc[-1]["pct_winners"]
+    # absent value_col => no value-decile breakdown
+    assert "by_value_decile" not in reassessment_equity(df)
+
+
 def test_reassessment_equity_chart_smoke(tmp_path):
     import matplotlib
     matplotlib.use("Agg")
