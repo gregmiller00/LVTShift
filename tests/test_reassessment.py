@@ -14,6 +14,8 @@ from lvt.reassessment import (  # noqa: E402
     model_multi_district_reassessment,
     decompose_reassessment_and_lvt,
     save_reassessment_export,
+    assessment_ratio_stats,
+    reassessment_equity,
 )
 from lvt.lvt_utils import _compute_adjusted_tax_components  # noqa: E402
 
@@ -193,3 +195,101 @@ def test_save_reassessment_export(tmp_path):
     reloaded = pd.read_csv(path)
     assert 'lvt_change' in reloaded.columns
     assert len(reloaded) == 2
+
+
+# --- #1: IAAO assessment-quality metrics ---
+def test_ratio_stats_uniform():
+    # A perfectly uniform base: every parcel assessed at 50% of market.
+    rng = np.random.default_rng(1)
+    m = rng.uniform(50_000, 500_000, 300)
+    df = pd.DataFrame({"assessed": 0.5 * m, "market": m})
+    s = assessment_ratio_stats(df, "assessed", "market")
+    assert s["n"] == 300
+    assert s["median_ratio"] == pytest.approx(0.5, abs=1e-9)
+    assert s["cod"] == pytest.approx(0.0, abs=1e-9)
+    assert s["prd"] == pytest.approx(1.0, abs=1e-9)
+    assert abs(s["prb"]) < 1e-9
+    assert s["cod_strong"] and s["prd_meets_iaao"] and s["prb_meets_iaao"]
+
+
+def test_ratio_stats_regressive():
+    # Ratios fall as value rises: cheap over-assessed, expensive under-assessed.
+    df = pd.DataFrame({"market": [100.0, 200.0, 400.0, 800.0],
+                       "assessed": [60.0, 100.0, 160.0, 240.0]})  # ratios 0.6,0.5,0.4,0.3
+    s = assessment_ratio_stats(df, "assessed", "market")
+    assert s["median_ratio"] == pytest.approx(0.45)
+    assert s["prd"] > 1.03          # PRD flags regressivity
+    assert s["prb"] < 0             # ratio falls per doubling of value
+    assert not s["prd_meets_iaao"]
+    assert s["cod"] == pytest.approx(22.2, abs=0.1)
+
+
+def test_ratio_stats_empty():
+    df = pd.DataFrame({"assessed": [0.0, 0.0], "market": [0.0, 0.0]})
+    s = assessment_ratio_stats(df, "assessed", "market")
+    assert s["n"] == 0
+    assert s["median_ratio"] != s["median_ratio"]  # NaN
+
+
+# --- #2: equity stratification of the reassessment shift ---
+def test_reassessment_equity_basic():
+    n = 200
+    rng = np.random.default_rng(2)
+    income = rng.uniform(20_000, 120_000, n)
+    # Losers concentrated at high income; winners at low income.
+    tax_change = np.where(income > 80_000, 100.0, -50.0)
+    df = pd.DataFrame({
+        "tax_change": tax_change,
+        "tax_change_pct": tax_change / 10.0,
+        "median_income": income,
+        "minority_pct": rng.uniform(0, 100, n),
+    })
+    out = reassessment_equity(df)
+    assert set(out) == {"overall", "by_income_quintile", "by_minority_band"}
+    iq = out["by_income_quintile"]
+    assert iq["n"].sum() == n
+    # lowest-income quintile wins more than highest-income quintile
+    assert iq.iloc[0]["pct_winners"] > iq.iloc[-1]["pct_winners"]
+    assert out["by_minority_band"]["n"].sum() == n
+    assert out["overall"].iloc[0]["n"] == n
+
+
+def test_reassessment_equity_with_ratio_cols():
+    n = 150
+    rng = np.random.default_rng(3)
+    market = rng.uniform(50_000, 400_000, n)
+    df = pd.DataFrame({
+        "tax_change": rng.uniform(-100, 100, n),
+        "tax_change_pct": rng.uniform(-20, 20, n),
+        "median_income": rng.uniform(20_000, 120_000, n),
+        "minority_pct": rng.uniform(0, 100, n),
+        "assessed": 0.4 * market,   # uniform 40%-of-market base
+        "market": market,
+    })
+    out = reassessment_equity(df, ratio_cols=("assessed", "market"))
+    iq = out["by_income_quintile"]
+    assert "median_ratio" in iq.columns and "cod" in iq.columns
+    # uniform ratio everywhere => ~0.40 median ratio and ~0 COD in every stratum
+    assert iq["median_ratio"].dropna().between(0.39, 0.41).all()
+    assert (iq["cod"].dropna() < 1e-6).all()
+
+
+def test_reassessment_equity_chart_smoke(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    from lvt.viz import reassessment_equity_chart
+    bd = pd.DataFrame({
+        "income_quintile": ["Q1", "Q2", "Q3", "Q4", "Q5"],
+        "n": [100, 100, 100, 100, 100],
+        "pct_winners": [80.0, 65.0, 55.0, 45.0, 30.0],
+        "median_change_pct": [-8.0, -4.0, -1.0, 2.0, 6.0],
+        "cod": [25.0, 22.0, 20.0, 18.0, 15.0],
+    })
+    out = reassessment_equity_chart(bd, "income_quintile", save_path=str(tmp_path / "eq.png"))
+    assert (tmp_path / "eq.png").exists()
+    assert len(out) == 5
+    # empty breakdown renders a placeholder without raising
+    empty = reassessment_equity_chart(
+        pd.DataFrame(columns=["income_quintile"]), "income_quintile",
+        save_path=str(tmp_path / "e2.png"))
+    assert len(empty) == 0

@@ -31,6 +31,12 @@ decompose_reassessment_and_lvt
 save_reassessment_export
     ``save_standard_export`` plus the reassessment / decomposition / per-district
     columns.
+assessment_ratio_stats
+    IAAO ratio-study quality metrics (median ratio, COD, PRD, PRB) for a set of
+    assessed-vs-market values — quantifies how uneven / regressive a base is.
+reassessment_equity
+    Stratify the reassessment winners/losers (and, optionally, the current base's
+    ratio quality) by income quintile and racial-composition band (IAAO s 7.3).
 
 Output columns reuse the names ``lvt_utils.save_standard_export`` and ``lvt.viz``
 already consume — ``current_tax`` / ``new_tax`` / ``tax_change`` /
@@ -41,7 +47,7 @@ unchanged.
 
 import pandas as pd
 import numpy as np
-from typing import Union, List, Tuple, Optional, Dict, Any
+from typing import Union, List, Tuple, Optional, Dict, Any, Sequence
 
 from lvt.lvt_utils import _coerce_numeric, _compute_adjusted_tax_components
 
@@ -608,3 +614,238 @@ def save_reassessment_export(
 
     out.to_csv(output_path, index=False)
     return out
+
+
+def assessment_ratio_stats(
+    df: pd.DataFrame,
+    assessed_col: str,
+    market_col: str,
+    *,
+    exclude_mask: Optional[pd.Series] = None,
+) -> Dict[str, Any]:
+    """
+    IAAO ratio-study quality metrics for a set of assessed-vs-market values.
+
+    Quantifies how good (or how uneven and regressive) an assessment base is —
+    the unfairness a reassessment is meant to fix. Computes the standard measures
+    from the IAAO Standard on Ratio Studies on the ratio ``assessed / market``:
+
+    - ``median_ratio`` — the level (e.g. 0.32 = assessed at 32% of market).
+    - ``cod`` — Coefficient of Dispersion: average absolute percent deviation of
+      the ratio from its median. Horizontal equity / uniformity. IAAO residential
+      standard <= 15 (<= 20 acceptable); lower is more uniform.
+    - ``prd`` — Price-Related Differential: mean ratio / value-weighted mean
+      ratio. Vertical equity. IAAO 0.98-1.03; > 1.03 is regressive (low-value
+      parcels over-assessed relative to high-value ones).
+    - ``prb`` — Price-Related Bias (Gloudemans): the fractional change in ratio
+      per doubling of value, from regressing each parcel's proportional deviation
+      from the median ratio on log2 of a value proxy. IAAO |PRB| <= 0.05 (<= 0.10
+      marginal); PRB < 0 is regressive.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+    assessed_col, market_col : str
+        Assessed (or modeled) value and market (sale / AVM) value columns. Only
+        rows with ``market > 0`` and ``assessed >= 0`` enter the study.
+    exclude_mask : pandas.Series, optional
+        Boolean Series aligned to ``df.index``; True rows are dropped (e.g.
+        fully-exempt or non-arms-length parcels).
+
+    Returns
+    -------
+    dict
+        ``n``, ``median_ratio``, ``mean_ratio``, ``weighted_mean_ratio``,
+        ``cod``, ``prd``, ``prb``, and IAAO-standard flags ``cod_meets_iaao``
+        (<= 20), ``cod_strong`` (<= 15), ``prd_meets_iaao`` (0.98-1.03),
+        ``prb_meets_iaao`` (|PRB| <= 0.05). ``n = 0`` with NaN metrics if no valid
+        rows.
+    """
+    assessed = _coerce_numeric(df[assessed_col])
+    market = _coerce_numeric(df[market_col])
+    valid = (market > 0) & (assessed >= 0)
+    if exclude_mask is not None:
+        valid = valid & ~exclude_mask.reindex(df.index, fill_value=False).astype(bool)
+
+    a = assessed[valid].to_numpy(dtype=float)
+    m = market[valid].to_numpy(dtype=float)
+    n = int(a.size)
+    nan = float("nan")
+    if n == 0:
+        return {
+            "n": 0, "median_ratio": nan, "mean_ratio": nan, "weighted_mean_ratio": nan,
+            "cod": nan, "prd": nan, "prb": nan, "cod_meets_iaao": False,
+            "cod_strong": False, "prd_meets_iaao": False, "prb_meets_iaao": False,
+        }
+
+    ratio = a / m
+    median_ratio = float(np.median(ratio))
+    mean_ratio = float(np.mean(ratio))
+    weighted_mean_ratio = float(a.sum() / m.sum())
+    cod = float(100.0 * np.mean(np.abs(ratio - median_ratio)) / median_ratio) if median_ratio > 0 else nan
+    prd = float(mean_ratio / weighted_mean_ratio) if weighted_mean_ratio > 0 else nan
+
+    # PRB (Gloudemans): proportional deviation from the median ratio regressed on
+    # log2 of a ratio-independent value proxy. Slope = fractional ratio change per
+    # doubling of value; negative => regressive.
+    prb = nan
+    if median_ratio > 0 and n >= 2:
+        pct_diff = (ratio - median_ratio) / median_ratio
+        value_proxy = 0.5 * m + 0.5 * (a / median_ratio)
+        ok = value_proxy > 0
+        if int(ok.sum()) >= 2:
+            ind = np.log(value_proxy[ok]) / np.log(2.0)
+            if np.ptp(ind) > 0:
+                prb = float(np.polyfit(ind, pct_diff[ok], 1)[0])
+
+    def _ok(x):
+        return x == x  # not NaN
+
+    return {
+        "n": n,
+        "median_ratio": median_ratio,
+        "mean_ratio": mean_ratio,
+        "weighted_mean_ratio": weighted_mean_ratio,
+        "cod": cod,
+        "prd": prd,
+        "prb": prb,
+        "cod_meets_iaao": bool(_ok(cod) and cod <= 20.0),
+        "cod_strong": bool(_ok(cod) and cod <= 15.0),
+        "prd_meets_iaao": bool(_ok(prd) and 0.98 <= prd <= 1.03),
+        "prb_meets_iaao": bool(_ok(prb) and abs(prb) <= 0.05),
+    }
+
+
+def reassessment_equity(
+    df: pd.DataFrame,
+    *,
+    change_col: str = "tax_change",
+    change_pct_col: str = "tax_change_pct",
+    income_col: str = "median_income",
+    minority_col: str = "minority_pct",
+    n_income_quantiles: int = 5,
+    minority_bins: Sequence[float] = (0, 10, 25, 50, 75, 100),
+    minority_labels: Optional[Sequence[str]] = None,
+    ratio_cols: Optional[Tuple[str, str]] = None,
+    exclude_mask: Optional[pd.Series] = None,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Stratify a reassessment's winners and losers by income and racial composition.
+
+    Answers the IAAO s 7.3 fairness question a reassessment raises: does the shift
+    move tax burden toward or away from lower-income / higher-minority
+    neighborhoods? Breaks the per-parcel outcome down by income quintile and by
+    Census racial-composition band (mirroring the agc_assessments equity study),
+    using the demographic columns LVTShift's census join already provides.
+
+    Optionally also reports the *current* base's ratio quality per stratum (pass
+    ``ratio_cols=(assessed_col, market_col)``) — so you can see whether the
+    worst-assessed (highest-COD) neighborhoods are the low-income / high-minority
+    ones, the horizontal-equity concern at the heart of assessment-fairness work.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Per-parcel reassessment output joined to demographics.
+    change_col : str
+        Dollar tax-change column; a parcel "wins" when it is < 0 (pays less). If
+        absent, the sign of ``change_pct_col`` is used.
+    change_pct_col : str
+        Percent tax-change column (median/mean change per group).
+    income_col : str
+        Block-group median household income (rows with income <= 0 / NaN dropped
+        from the income breakdown).
+    minority_col : str
+        Minority percentage, 0-100 (as emitted by ``save_standard_export``).
+    n_income_quantiles : int, default 5
+        Number of income quantiles (5 = quintiles; Q1 = lowest income).
+    minority_bins : sequence of float, default (0, 10, 25, 50, 75, 100)
+        Right-closed band edges for ``minority_col``; the > 50 band isolates a
+        majority-minority stratum.
+    minority_labels : sequence of str, optional
+        Band labels (len == len(minority_bins) - 1). Default ``"lo-hi%"``.
+    ratio_cols : (str, str), optional
+        ``(assessed_col, market_col)`` to also report per-stratum ``median_ratio``
+        and ``cod`` of the current base.
+    exclude_mask : pandas.Series, optional
+        True rows dropped from every breakdown.
+
+    Returns
+    -------
+    dict of pandas.DataFrame
+        ``{"overall", "by_income_quintile", "by_minority_band"}``. Each breakdown
+        row: the group label, ``n``, ``pct_winners``, ``median_change_pct``,
+        ``mean_change_pct``, ``total_change_dollars`` (plus ``median_ratio`` /
+        ``cod`` when ``ratio_cols`` is given).
+    """
+    if exclude_mask is not None:
+        keep = ~exclude_mask.reindex(df.index, fill_value=False).astype(bool)
+    else:
+        keep = pd.Series(True, index=df.index)
+
+    has_dollars = change_col in df.columns
+    change_dollars = _coerce_numeric(df[change_col]) if has_dollars else pd.Series(np.nan, index=df.index)
+    change_pct = _coerce_numeric(df[change_pct_col]) if change_pct_col in df.columns else pd.Series(np.nan, index=df.index)
+    win = (change_dollars < 0) if has_dollars else (change_pct < 0)
+
+    def _summarize(groups: pd.Series, label_col: str) -> pd.DataFrame:
+        if isinstance(groups.dtype, pd.CategoricalDtype):
+            cats = list(groups.cat.categories)
+        else:
+            cats = list(pd.unique(groups.dropna()))
+        rows = []
+        for grp in cats:
+            idx = df.index[(groups == grp) & keep]
+            if len(idx) == 0:
+                continue
+            row = {
+                label_col: grp,
+                "n": int(len(idx)),
+                "pct_winners": round(float(win.loc[idx].mean()) * 100, 1),
+                "median_change_pct": round(float(change_pct.loc[idx].median()), 1),
+                "mean_change_pct": round(float(change_pct.loc[idx].mean()), 1),
+                "total_change_dollars": float(change_dollars.loc[idx].sum()) if has_dollars else float("nan"),
+            }
+            if ratio_cols is not None:
+                rs = assessment_ratio_stats(df.loc[idx], ratio_cols[0], ratio_cols[1])
+                row["median_ratio"] = round(rs["median_ratio"], 3) if rs["median_ratio"] == rs["median_ratio"] else float("nan")
+                row["cod"] = round(rs["cod"], 1) if rs["cod"] == rs["cod"] else float("nan")
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    # Income quintiles
+    inc = _coerce_numeric(df[income_col])
+    inc_valid = keep & inc.notna() & (inc > 0)
+    inc_groups = pd.Series(index=df.index, dtype="object")
+    if int(inc_valid.sum()) >= n_income_quantiles:
+        codes = pd.qcut(inc[inc_valid], n_income_quantiles, labels=False, duplicates="drop")
+        nq = int(codes.max()) + 1
+        inc_labels = [f"Q{i + 1}" for i in range(nq)]
+        inc_groups.loc[inc_valid] = codes.map(lambda c: f"Q{int(c) + 1}")
+        inc_groups = pd.Series(pd.Categorical(inc_groups, categories=inc_labels, ordered=True), index=df.index)
+
+    # Racial-composition bands
+    minority = _coerce_numeric(df[minority_col])
+    if minority_labels is None:
+        minority_labels = [f"{int(minority_bins[i])}-{int(minority_bins[i + 1])}%" for i in range(len(minority_bins) - 1)]
+    min_valid = keep & minority.notna()
+    min_groups = pd.Series(index=df.index, dtype="object")
+    if int(min_valid.sum()) > 0:
+        mc = pd.cut(minority[min_valid], bins=list(minority_bins), labels=list(minority_labels), include_lowest=True)
+        min_groups.loc[min_valid] = mc.astype(object)
+        min_groups = pd.Series(pd.Categorical(min_groups, categories=list(minority_labels), ordered=True), index=df.index)
+
+    overall = pd.DataFrame([{
+        "group": "all",
+        "n": int(keep.sum()),
+        "pct_winners": round(float(win[keep].mean()) * 100, 1) if int(keep.sum()) else float("nan"),
+        "median_change_pct": round(float(change_pct[keep].median()), 1),
+        "mean_change_pct": round(float(change_pct[keep].mean()), 1),
+        "total_change_dollars": float(change_dollars[keep].sum()) if has_dollars else float("nan"),
+    }])
+
+    return {
+        "overall": overall,
+        "by_income_quintile": _summarize(inc_groups, "income_quintile"),
+        "by_minority_band": _summarize(min_groups, "minority_band"),
+    }
