@@ -95,6 +95,8 @@ flat_millage, new_revenue, df = model_revenue_neutral_reassessment(
 
 For overlapping taxing districts (county / municipality / school), use `model_multi_district_reassessment` — each district is rolled back to revenue neutrality *within itself* (the Pennsylvania anti-windfall method, 53 Pa.C.S. § 8823), and a parcel's bill is summed across the districts it belongs to. To separate the reassessment effect from an LVT shift, stack `model_split_rate_tax` on the new base and call `decompose_reassessment_and_lvt`. Worked example: `cities/reading/model_reassessment.ipynb`; the real Reading decomposition runs in `cities/reading/model_lycd.ipynb` Section 7b.
 
+**Fairness lens.** Beyond who-wins/loses, score the analysis the way an IAAO ratio study would. `assessment_ratio_stats(df, assessed_col, market_col)` measures how (un)fair the *current* base is — median ratio (level), COD (uniformity / horizontal equity), and PRD / PRB (regressivity / vertical equity), each with IAAO-standard flags. `reassessment_equity(df, ...)` stratifies the winners/losers by income quintile, racial-composition band (IAAO §7.3), and value decile (pass `value_col` — the vertical equity of the shift), with optional per-stratum current-base COD (`ratio_cols`) and bootstrap confidence intervals (`n_boot`, so thin strata aren't read as precise). `lvt.viz.reassessment_equity_chart` renders any breakdown (median change + % winners, with the COD gradient overlaid). See Part D of `cities/reading/model_reassessment.ipynb`.
+
 ---
 
 ## Property Categories
