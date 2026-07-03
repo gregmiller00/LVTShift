@@ -155,6 +155,8 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **Philadelphia has four notebooks.** `cities/philadelphia/` contains `model.ipynb` (OPA), `model_lycd.ipynb` (LYCD), `model_post_abatement.ipynb` (OPA post-abatement), and `model_lycd_post_abatement.ipynb` (LYCD post-abatement). All four export to `analysis/data/philadelphia*.csv` with a `parcel_id` column (added via `parcel_id_col='parcel_number'` in `save_standard_export`).
 
+**All four notebooks share one cache: `cities/philadelphia/data/parcels.gpq`.** Any rebuild of the cache (the fetch fallbacks in `model.ipynb` and `model_post_abatement.ipynb`) must emit the full column superset: the assessment value columns plus `pin` + `total_area` (LYCD lot-area chain) and `owner_1` + `owner_2` (owner-concentration analysis in `model.ipynb`). The LYCD notebooks read the cache unconditionally and raise a clear error if columns are missing. Keep `pin` integer-typed — the LYCD notebooks stringify it as a join key, and a float dtype would add a `.0` suffix and break the PIN match. Also note Carto's `assessments.year` column is varchar: the filter must be `WHERE year = '2024'` (quoted); an unquoted integer comparison returns HTTP 400.
+
 **`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
 
 ## Notebooks

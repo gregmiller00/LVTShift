@@ -481,6 +481,138 @@ def fix_bellingham_to_split_rate():
         print("  bellingham: export pattern not found (already fixed?)")
 
 
+# ---------------------------------------------------------------------------
+# 13. Philadelphia: shared parcels.gpq cache — rebuild paths must emit the
+#     full column superset needed by all four notebooks
+# ---------------------------------------------------------------------------
+def fix_philadelphia_shared_cache():
+    """All four Philadelphia notebooks read cities/philadelphia/data/parcels.gpq.
+
+    model.ipynb's rebuild fallback fetched owner_1/owner_2 but not pin/total_area
+    (needed by the LYCD notebooks' lot-area chain); model_post_abatement.ipynb's
+    fallback fetched pin/total_area but not owner_1/owner_2 (needed by
+    model.ipynb's owner-concentration analysis). Either rebuild silently broke
+    the other notebooks. Patch both fallbacks to fetch the superset, and give
+    the two LYCD notebooks (which read the cache unconditionally) an explicit
+    missing-column error instead of a confusing downstream KeyError.
+    """
+    phl = CITIES_DIR / "philadelphia"
+
+    numeric_loop_old = (
+        "    for col in ['taxable_land', 'taxable_building', 'market_value', 'exempt_land', 'exempt_building']:\n"
+        "        gdf[col] = pd.to_numeric(gdf[col], errors='coerce').fillna(0.0)\n"
+        "\n"
+        "    gdf.to_parquet(PARCEL_PATH)"
+    )
+    numeric_loop_new = (
+        "    for col in ['taxable_land', 'taxable_building', 'market_value', 'exempt_land', 'exempt_building', 'total_area']:\n"
+        "        gdf[col] = pd.to_numeric(gdf[col], errors='coerce').fillna(0.0)\n"
+        "    # pin is used as a string join key by the LYCD notebooks — keep it integer-typed\n"
+        "    # (a float dtype would stringify with a '.0' suffix and break the PIN match)\n"
+        "    gdf['pin'] = pd.to_numeric(gdf['pin'], errors='coerce').astype('Int64')\n"
+        "\n"
+        "    gdf.to_parquet(PARCEL_PATH)"
+    )
+    shared_cache_comment = (
+        "    # parcels.gpq is shared by all four Philadelphia notebooks. A rebuild must keep\n"
+        "    # the full column superset: pin + total_area (LYCD lot-area chain) and\n"
+        "    # owner_1 + owner_2 (owner-concentration analysis in model.ipynb).\n"
+    )
+    # Carto's assessments.year column is varchar — an unquoted integer comparison
+    # now returns 400 ("operator does not exist: character varying = integer")
+    year_filter_old = "'exempt_land, exempt_building FROM assessments WHERE year = 2024'"
+    year_filter_new = '"exempt_land, exempt_building FROM assessments WHERE year = \'2024\'"'
+
+    # model.ipynb: add pin + total_area to the OPA fetch
+    path = phl / "model.ipynb"
+    nb = load_nb(path)
+    n_model = patch_cells(nb, [
+        (
+            "    # Step 2: Download current OPA for geometry, category codes, and owner name(s)\n",
+            "    # Step 2: Download current OPA for geometry, category codes, owner name(s),\n"
+            "    # PIN, and lot area.\n" + shared_cache_comment,
+        ),
+        (
+            "q_opa = 'SELECT parcel_number, category_code, owner_1, owner_2, the_geom FROM opa_properties_public'",
+            "q_opa = 'SELECT parcel_number, pin, category_code, total_area, owner_1, owner_2, the_geom FROM opa_properties_public'",
+        ),
+        (numeric_loop_old, numeric_loop_new),
+        (year_filter_old, year_filter_new),
+    ])
+    if n_model:
+        save_nb(path, nb)
+    print(f"  philadelphia model.ipynb: {n_model} replacement(s)")
+
+    # model_post_abatement.ipynb: add owner_1 + owner_2 to the OPA fetch
+    path = phl / "model_post_abatement.ipynb"
+    nb = load_nb(path)
+    n_post = patch_cells(nb, [
+        (
+            "    # Step 2: Download current OPA for geometry and category codes\n",
+            "    # Step 2: Download current OPA for geometry, category codes, owner name(s),\n"
+            "    # PIN, and lot area.\n" + shared_cache_comment,
+        ),
+        (
+            "q_opa = 'SELECT parcel_number, pin, category_code, total_area, the_geom FROM opa_properties_public'",
+            "q_opa = 'SELECT parcel_number, pin, category_code, total_area, owner_1, owner_2, the_geom FROM opa_properties_public'",
+        ),
+        (numeric_loop_old, numeric_loop_new),
+        (year_filter_old, year_filter_new),
+    ])
+    if n_post:
+        save_nb(path, nb)
+    print(f"  philadelphia model_post_abatement.ipynb: {n_post} replacement(s)")
+
+    # LYCD notebooks: fail loudly if the cache is missing required columns
+    guard = (
+        "_required = {'parcel_number', 'taxable_land', 'taxable_building', 'market_value',\n"
+        "             'exempt_land', 'exempt_building', 'pin', 'category_code', 'total_area'}\n"
+        "_missing = _required - set(gdf.columns)\n"
+        "if _missing:\n"
+        "    raise ValueError(\n"
+        "        f'parcels.gpq is missing columns {sorted(_missing)} — it was likely rebuilt by an '\n"
+        "        'older fetch cell. Delete it and re-run the fetch cell in model.ipynb to rebuild '\n"
+        "        'the full shared cache.'\n"
+        "    )\n"
+    )
+    for name in ("model_lycd.ipynb", "model_lycd_post_abatement.ipynb"):
+        path = phl / name
+        nb = load_nb(path)
+        n = patch_cells(nb, [
+            (
+                "gdf = gpd.read_parquet(PARCEL_PATH)\ngdf['parcel_number']",
+                "gdf = gpd.read_parquet(PARCEL_PATH)\n" + guard + "gdf['parcel_number']",
+            ),
+        ])
+        if n:
+            save_nb(path, nb)
+        print(f"  philadelphia {name}: {n} replacement(s)")
+
+    # Markdown column-mapping tables: document the shared-cache columns
+    geometry_row = "| Geometry | `opa_properties_public` | `the_geom` | WKB point (parcel centroid) |"
+    extra_rows = (
+        "\n| PIN (DOR key) | `opa_properties_public` | `pin` | Join key for the LYCD notebooks' lot-area chain |"
+        "\n| Lot area (sq ft) | `opa_properties_public` | `total_area` | Used by the LYCD notebooks' lot-area chain |"
+    )
+    owner_row = (
+        "\n| Owner name(s) | `opa_properties_public` | `owner_1`, `owner_2` | Cached for model.ipynb's owner-concentration analysis |"
+    )
+    for name, addition in (("model.ipynb", extra_rows), ("model_post_abatement.ipynb", owner_row + extra_rows)):
+        path = phl / name
+        nb = load_nb(path)
+        n = 0
+        for cell in nb.get("cells", []):
+            if cell.get("cell_type") != "markdown":
+                continue
+            src = cell_source(cell)
+            if geometry_row in src and "| `pin` |" not in src:
+                set_cell_source(cell, src.replace(geometry_row, geometry_row + addition))
+                n += 1
+        if n:
+            save_nb(path, nb)
+        print(f"  philadelphia {name} (markdown): {n} replacement(s)")
+
+
 if __name__ == "__main__":
     print("Patching notebooks...")
     print()
@@ -511,5 +643,8 @@ if __name__ == "__main__":
     print()
     print("--- Bellingham: abatement -> 4:1 split-rate ---")
     fix_bellingham_to_split_rate()
+    print()
+    print("--- Philadelphia: shared parcels.gpq cache superset ---")
+    fix_philadelphia_shared_cache()
     print()
     print("Done.")
