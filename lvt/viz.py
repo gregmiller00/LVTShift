@@ -1098,21 +1098,51 @@ def _make_ten_pct_chart(
     return fig
 
 
+def _bin_labels(n_bins: int) -> List[str]:
+    """Bucket labels for an n-bin progressivity chart (quintiles, deciles, …).
+
+    Five bins keep the historical ``Q1 (Lowest)…Q5 (Highest)`` form; ten use a
+    ``D``-prefix; anything else falls back to a generic ``G`` prefix. The first
+    and last carry ``(Lowest)`` / ``(Highest)`` so orientation is unambiguous.
+    """
+    prefix = {5: 'Q', 10: 'D'}.get(n_bins, 'G')
+    labels = [f'{prefix}{i + 1}' for i in range(n_bins)]
+    labels[0] = f'{labels[0]} (Lowest)'
+    labels[-1] = f'{labels[-1]} (Highest)'
+    return labels
+
+
+def _bin_palette(n_bins: int) -> List[str]:
+    """Green gradient of length ``n_bins`` (darkest = highest rank).
+
+    Returns the curated five-tone palette unchanged for ``n_bins == 5`` so the
+    standard quintile charts are byte-for-byte identical; otherwise samples the
+    Matplotlib ``Greens`` colormap evenly.
+    """
+    if n_bins == 5:
+        return list(_QUINTILE_GREENS)
+    import matplotlib.cm as cm
+    greens = cm.get_cmap('Greens')
+    lo, hi = 0.20, 0.92  # avoid the near-white / near-black extremes
+    return [greens(lo + (hi - lo) * i / (n_bins - 1)) for i in range(n_bins)]
+
+
 def _make_quintile_chart(
     df: pd.DataFrame,
     group_col: str,
     group_name: str,
     city_title: str,
     filter_label: str,
+    n_bins: int = 5,
 ) -> Optional[plt.Figure]:
-    """Green-gradient quintile bar chart for a census dimension.
+    """Green-gradient quantile bar chart for a census dimension.
 
     Parameters
     ----------
     df : pd.DataFrame
         Parcel data (already filtered to the desired subset).
     group_col : str
-        Column to quintile on (e.g. ``'median_income'`` or ``'minority_pct'``).
+        Column to bin on (e.g. ``'median_income'`` or ``'minority_pct'``).
     group_name : str
         Human-readable dimension name for the title (e.g. ``'Neighborhood Income'``).
     city_title : str
@@ -1120,25 +1150,29 @@ def _make_quintile_chart(
     filter_label : str
         Description of the parcel filter applied, shown in the title
         (e.g. ``'Excl. Vacant Land, Residential Only'``).
+    n_bins : int, default 5
+        Number of quantile buckets. ``5`` → quintiles (default, unchanged),
+        ``10`` → deciles. The title's bucket word adapts automatically.
 
     Returns
     -------
     plt.Figure or None
     """
+    bin_word = {5: 'Quintile', 10: 'Decile'}.get(n_bins, f'{n_bins}-Quantile')
+
     valid = df[df[group_col].notna()].copy()
     if group_col == 'median_income':
         valid = valid[valid[group_col] > 0]
-    if len(valid) < 50 or 'tax_change_pct' not in valid.columns:
+    if len(valid) < max(50, n_bins * 5) or 'tax_change_pct' not in valid.columns:
         return None
 
     try:
-        valid['_q'] = pd.qcut(valid[group_col], 5, labels=False, duplicates='drop')
+        valid['_q'] = pd.qcut(valid[group_col], n_bins, labels=False, duplicates='drop')
     except ValueError:
         return None
     if valid['_q'].nunique() < 2:
         return None
 
-    q_x_labels = ['Q1 (Lowest)', 'Q2', 'Q3', 'Q4', 'Q5 (Highest)']
     q_stats = (
         valid.groupby('_q', observed=False)
         .agg(median_pct=('tax_change_pct', 'median'),
@@ -1150,21 +1184,30 @@ def _make_quintile_chart(
     if n == 0:
         return None
 
+    # Labels sized to the bins actually produced (qcut may drop duplicate edges).
+    q_x_labels = _bin_labels(n)
+    palette = _bin_palette(n)
+
     vals = q_stats['median_pct'].tolist()
-    # Assign darkest color to the most-negative quintile (biggest tax decrease),
+    # Assign darkest color to the most-negative bucket (biggest tax decrease),
     # lightest to the least-negative.  Matches archived chart convention:
-    #   color_rank = argsort(argsort(-vals))  →  most negative → rank 4 → darkest
+    #   color_rank = argsort(argsort(-vals))  →  most negative → highest rank → darkest
     vals_arr = np.array(vals)
-    color_ranks = np.argsort(np.argsort(-vals_arr))  # 0=most positive, 4=most negative
-    colors = [_QUINTILE_GREENS[min(int(r), 4)] for r in color_ranks]
+    color_ranks = np.argsort(np.argsort(-vals_arr))  # 0=most positive … n-1=most negative
+    colors = [palette[min(int(r), n - 1)] for r in color_ranks]
 
     min_val = min(vals + [0])
     max_val = max(vals + [0])
     y_range = max(max_val - min_val, 0.5)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Widen the canvas and shrink label fonts as the bin count grows.
+    fig_w = 10 if n_bins <= 5 else 14
+    lbl_fs = 12 if n_bins <= 5 else 9
+    val_fs = 12 if n_bins <= 5 else 8
+    bar_w = 0.72 if n_bins <= 5 else 0.82
+    fig, ax = plt.subplots(figsize=(fig_w, 6))
     x = np.arange(n)
-    bars = ax.bar(x, vals, color=colors, edgecolor='none', width=0.72)
+    bars = ax.bar(x, vals, color=colors, edgecolor='none', width=bar_w)
     ax.axhline(0, color='black', linewidth=1.5, zorder=3)
 
     for spine in ax.spines.values():
@@ -1173,28 +1216,28 @@ def _make_quintile_chart(
     ax.set_xticks([])
     ax.tick_params(left=False, labelleft=False)
 
-    # Quintile labels sit at y=0: above it when bars go down, below when bars go up
+    # Bucket labels sit at y=0: above it when bars go down, below when bars go up
     lbl_offset = y_range * 0.04
     for i, (lbl, val) in enumerate(zip(q_x_labels, vals)):
         if val <= 0:
             ax.text(i,  lbl_offset, lbl, ha='center', va='bottom',
-                    fontsize=12, fontweight='bold', color='#1a1a1a')
+                    fontsize=lbl_fs, fontweight='bold', color='#1a1a1a')
         else:
             ax.text(i, -lbl_offset, lbl, ha='center', va='top',
-                    fontsize=12, fontweight='bold', color='#1a1a1a')
+                    fontsize=lbl_fs, fontweight='bold', color='#1a1a1a')
 
     # Values inside bars (skip if bar is too short to label)
     for i, (bar, val) in enumerate(zip(bars, vals)):
         if abs(val) >= y_range * 0.12:
             ax.text(bar.get_x() + bar.get_width() / 2, val / 2,
                     f'{val:.1f}%',
-                    ha='center', va='center', fontsize=12, fontweight='bold', color='black')
+                    ha='center', va='center', fontsize=val_fs, fontweight='bold', color='black')
 
     margin = y_range * 0.22
     ax.set_ylim(min_val - margin, max_val + margin)
     ax.set_xlim(-0.6, n - 0.4)
     ax.set_title(
-        f'Median Tax Change by {group_name} Quintile\n({filter_label})',
+        f'Median Tax Change by {group_name} {bin_word}\n({filter_label})',
         fontsize=13, fontweight='bold', pad=12,
     )
     fig.tight_layout()
