@@ -1414,9 +1414,10 @@ def save_standard_export(
     income_col: str = 'median_income',
     minority_col: str = 'minority_pct',
     black_col: str = 'black_pct',
+    parcel_id_col: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Build and save the 16-column standardized cross-city export CSV.
+    Build and save the standardized cross-city export CSV.
 
     Emits warnings for non-standard property categories and if revenue
     neutrality deviates beyond 1%, but does not raise errors for either.
@@ -1463,11 +1464,15 @@ def save_standard_export(
         Column holding block-group minority percentage (0-100).
     black_col : str
         Column holding block-group Black/African American percentage (0-100).
+    parcel_id_col : str, optional
+        Column in df holding a unique parcel identifier (e.g. 'parcel_number').
+        When provided, a 'parcel_id' column is prepended to the output CSV.
+        Useful for spatial joins in downstream mapping workflows.
 
     Returns
     -------
     pd.DataFrame
-        The 16-column standardized dataframe that was written to CSV.
+        The standardized dataframe that was written to CSV.
     """
     import os
 
@@ -1554,6 +1559,13 @@ def save_standard_export(
                 f"current ${total_current:,.0f}, new ${total_new:,.0f} "
                 f"({rev_diff_pct:.2f}% difference)"
             )
+
+    # Optional parcel identifier — prepend so it's the first column
+    if parcel_id_col is not None:
+        if parcel_id_col in df.columns:
+            out.insert(0, 'parcel_id', df[parcel_id_col].values)
+        else:
+            print(f"  [warn] {city}: parcel_id_col '{parcel_id_col}' not found in df — skipping")
 
     # Write
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)

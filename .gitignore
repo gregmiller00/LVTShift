@@ -173,3 +173,6 @@ analysis/legal/
 
 # Model methodology explainers (kept local-only)
 analysis/explainers/
+
+# Political viability briefs (kept local-only)
+analysis/political/
