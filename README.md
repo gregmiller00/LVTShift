@@ -268,6 +268,7 @@ All runnable cities use a harmonized **4:1 split-rate** scenario (land taxed at 
 | St. Paul | MN | 72K | ✓ CSV | Full tax bill; Tax Capacity; condo collapse by PlatID |
 | Syracuse | NY | 42K | ✓ CSV | Onondaga County |
 | Tulsa | OK | — | ✓ CSV | Canonical single-notebook model |
+| Washington | DC | 122.3K | ✓ CSV | Unified city/county; current tax taken directly from OTR's per-parcel billed amount (`ANNUALTAX`); preserves Homestead Deduction + Senior/Disabled 50% relief in the reform |
 | Cincinnati | OH | — | ✗ Blocked | CAGIS ArcGIS source gone; no current endpoint with land values |
 | Spokane | WA | — | ✗ Blocked | Needs `charge_info_1/2.xlsx` manually downloaded from Spokane County |
 | Denver | CO | — | ✗ Stub | Depends on manually-assembled data files not in repo |

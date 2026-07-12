@@ -100,6 +100,47 @@ The tax base works differently by state; `model-policy.md` documents all real pa
 
 One recurring pattern worth knowing: **condo collapse** (St. Paul / Ramsey County). Some assessors give condo units token land values ($1,000/unit). Before modeling, condos are collapsed by `PlatID` into buildings — summing values/taxes, imputing the land/building split from the neighborhood median improvement ratio of non-condo parcels, and unioning geometries via `collapse_geometries()`.
 
+### Washington, DC — Derived-Bill Modeling and the Nominal-Rate-vs-Billed-Amount Trap
+
+DC is a single unified city/county/state-equivalent government (FIPS 11001) — the real property tax is
+one levy, no county/school layer to add. Parcel data comes from DC GIS's `Property_and_Land_WebMercator`
+FeatureServer, Layer 40 (Owner Polygons / Common Ownership Layer), which merges geometry with CAMA
+assessed values and a **live-computed per-parcel tax bill (`ANNUALTAX`)** — DC is unusual among modeled
+cities in that `current_tax` is taken directly from this observed-bill field (the Baltimore B4 pattern
+in `model-policy.md`) rather than reconstructed from class + value, since `ANNUALTAX` already reflects
+DC's per-class rate brackets, the Homestead Deduction, Senior/Disabled 50% relief, and any mixed-use
+blending exactly as billed.
+
+**Exemption trap: key off `ANNUALTAX`, not `TAXRATE`.** A first pass flagged full exemption using
+`TAXRATE == 0`. That missed 35 parcels assessed at $500M–$2.1B each (~$30B total, ~9% of the taxable
+base) — large civic/institutional properties (several with `PAR ...`-prefixed SSLs, suggesting
+federal-reservation-style records) carrying a nonzero nominal Class 2 `TAXRATE` (1.89%) but an actual
+`ANNUALTAX` of $0. Including their assessed value in the split-rate solver's land base collapsed the
+solved millage toward zero and pinned an unrelated category ("Other Commercial") at a false +647%
+ceiling. Fix: flag full exemption off `ANNUALTAX <= 0` (the billed amount), not the nominal rate.
+
+**Relief mechanics** (`HSTDCODE` column, verified empirically against the data): `1` = Homestead
+Deduction only ($91,950 for TY2026); `5` = Homestead + Senior, and `3` = Homestead + Disabled — both
+get an *additional* 50% cut on the computed bill (confirmed: `ANNUALTAX / (CAPCURR * TAXRATE / 100)`
+≈ 0.50 for codes 3/5, ≈ 1.00 for codes 1/7); `7` = a rarer homestead variant, no 50% cut. The reform
+preserves this structure via `model_split_rate_tax`'s `exemption_col` (dollar homestead deduction) and
+`credit_rate_col` (0.5 for codes 3/5) parameters.
+
+**Structural result — residential goes up, not down.** DC currently taxes commercial property (Class 2,
+$1.65–1.89/$100) at roughly double the residential rate (Class 1, $0.85/$100). A single citywide
+land/improvement millage pair solved across all classes together equalizes this differential: the
+solved land millage lands between DC's current residential and commercial rates, so commercial
+buildings get a large cut while residential land — previously taxed at less than half the commercial
+rate — rises to meet the new blended rate. Confirmed by hand-checking the millage math against each
+class's current rate; this is a real consequence of reforming an already-differentiated class-rate
+system into a uniform land-value base, not a modeling artifact.
+
+**Known revenue gap (~9%, documented, not closed).** Modeled current-tax revenue undershoots DC OCFO's
+FY2026 Real Property Tax estimate ($2,748,983,000; September 2025 Revenue Estimates) by about 9%.
+Ruled out: duplicate SSLs, condo double-counting, OLD- vs NEW-assessment-year confusion (aggregate
+values agree within 0.3%). Leading unconfirmed hypothesis: OCFO's total likely includes Public Utility
+Real Property (assessed by a separate OTR unit, not published on this parcel FeatureServer).
+
 ### lvt_utils.py (core modeling)
 
 Key functions:
