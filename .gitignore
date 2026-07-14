@@ -117,12 +117,14 @@ data/
 cities/*/data/
 analysis/data/
 analysis/reports/
+analysis/maps/
 
 # Common data file extensions
 *.csv
 *.xlsx
 *.xls
 *.parquet
+*.pmtiles
 *.json
 *.geojson
 *.shp

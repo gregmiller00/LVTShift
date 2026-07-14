@@ -73,6 +73,7 @@ lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions)
 lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
 lvt/transit_utils.py   → GTFS feeds, routed walk-shed isochrones, OSM parking analysis
 lvt/viz.py             → Scatter plots, quintile analysis, demographic charts, city report
+lvt/parcel_map.py      → Per-parcel GeoParquet export + self-contained interactive HTML map
 ```
 
 Notebooks import via the package:
@@ -82,7 +83,7 @@ from lvt.lvt_utils import model_split_rate_tax
 from lvt.cloud_utils import get_feature_data_with_geometry
 ```
 
-**Data flow**: Fetch parcels (cloud_utils) → classify property types → rebuild current tax → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → `save_standard_export()` → `create_city_report()` (viz)
+**Data flow**: Fetch parcels (cloud_utils) → classify property types → rebuild current tax → model LVT scenarios (lvt_utils) → merge Census demographics (census_utils) → `save_standard_export()` → `create_city_report()` (viz) → `save_parcel_map_export()` + `create_parcel_map()` (parcel_map)
 
 ### Key Design Patterns
 
@@ -106,8 +107,15 @@ Key functions:
 - `model_full_building_abatement` / `model_stacking_improvement_exemption` → building-exemption pathway
 - `calculate_current_tax(...)` → rebuild the existing system, honoring exemptions
 - `calculate_category_tax_summary(df, category_col, current_tax_col, new_tax_col)` → summary stats by property type
-- `save_standard_export(...)` → standardized per-parcel CSV in `analysis/data/<city>.csv`
+- `save_standard_export(...)` → standardized 16-column per-parcel CSV in `analysis/data/<city>.csv`
+- `build_standard_export_frame(...)` → shared column builder behind both `save_standard_export` and the parcel-map export (so the two never drift)
 - `ensure_geodataframe(df)` → handles WKT, WKB hex, and binary geometry encodings
+
+### parcel_map.py (interactive maps)
+
+- `save_parcel_map_export(gdf, city, output_path, model_type, land_millage, improvement_millage, ...)` → GeoParquet in `analysis/maps/<city>.parquet` with geometry (WGS84) + the standard tax columns + optional per-parcel identity columns (`parcel_id`, `parcel_url`, `owner_name`, `owner_address`). These identity columns are intentionally NOT in the flat cross-city CSV. All identity params are optional and column-name-driven.
+- `create_parcel_map(source, city, ...)` → interactive HTML (`analysis/reports/<city>/parcel_map.html`) coloring parcels by `tax_change_pct` (green = pays less, red = pays more), road/satellite base-map toggle, fullscreen, click-for-details (land/building values + county-record link), and a click-through gallery of the report PNGs. Small/medium cities get a self-contained Leaflet file (parcel data embedded, `simplify_tolerance_m` default 2 m lightens only the viewer geometry, not the stored parquet). Cities above `tile_threshold` (default 100k parcels) instead get **vector tiles** — see `create_parcel_tile_map`.
+- `create_parcel_tile_map(source, city, ...)` → builds `analysis/reports/<city>/<city>.pmtiles` (tippecanoe) + a MapLibre GL viewer. Keeps large cities fast (e.g. Phoenix 525k: a 0.8 MB HTML + streamed tiles instead of a 190 MB single file). Must be served over a **range-capable** HTTP server — run `python3 scripts/serve_maps.py` (plain `python3 -m http.server` can't byte-serve PMTiles).
 
 ### cloud_utils.py (data fetching)
 
@@ -129,7 +137,7 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 4. Rebuild the current tax and check against the official revenue figure
 5. Run the split-rate or abatement model
 6. Optional exploration charts
-7. Census join → `save_standard_export()` → `create_city_report()` (exact closing pattern — do not modify)
+7. Census join → `save_standard_export()` → `create_city_report()` → `save_parcel_map_export()` + `create_parcel_map()` (exact closing pattern — do not modify)
 
 ## Documentation
 
@@ -147,4 +155,4 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 
 ## Data Files
 
-All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each city's scraped data is cached locally in `cities/<city>/data/`; notebooks auto-detect cached files and skip re-scraping when a recent file exists. Standard exports land in `analysis/data/` and reports in `analysis/reports/` (both gitignored).
+All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each city's scraped data is cached locally in `cities/<city>/data/`; notebooks auto-detect cached files and skip re-scraping when a recent file exists. Standard exports land in `analysis/data/`, reports (7 PNGs + `parcel_map.html`) in `analysis/reports/`, and per-parcel map GeoParquets in `analysis/maps/` (all gitignored).

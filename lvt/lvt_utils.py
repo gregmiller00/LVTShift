@@ -1395,10 +1395,9 @@ STANDARD_PROPERTY_CATEGORIES = {
 MODEL_TYPE_EXAMPLE = "split_rate:4.0"
 
 
-def save_standard_export(
+def build_standard_export_frame(
     df: pd.DataFrame,
     city: str,
-    output_path: str,
     model_type: str,
     land_millage: float,
     improvement_millage: float,
@@ -1416,68 +1415,23 @@ def save_standard_export(
     black_col: str = 'black_pct',
 ) -> pd.DataFrame:
     """
-    Build and save the 16-column standardized cross-city export CSV.
+    Build the 16-column standardized cross-city frame (no I/O).
 
-    Emits warnings for non-standard property categories and if revenue
-    neutrality deviates beyond 1%, but does not raise errors for either.
-    Demographic columns (geoid, income, minority_pct, black_pct) are
-    included as null when not present in df.
+    This is the shared core used by both ``save_standard_export`` (which writes
+    the non-spatial CSV) and ``lvt.parcel_map.save_parcel_map_export`` (which
+    attaches geometry and identity columns and writes GeoParquet). Keeping the
+    column logic here means the two exports can never drift.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Final modeled dataframe containing all required columns.
-    city : str
-        Lowercase slug, e.g. "baltimore". Used as the city column value.
-    output_path : str
-        File path for the output CSV (e.g. "../../analysis/data/baltimore.csv").
-    model_type : str
-        Encoded model description. Format: "<kind>:<param>[,<kind>:<param>]".
-        E.g. "split_rate:4.0", "abatement:100pct", "split_rate:4.0,exemption:50000".
-    land_millage : float
-        Effective land millage rate (per $1,000) from the model.
-    improvement_millage : float
-        Effective improvement millage rate (per $1,000) from the model.
-    property_category_col : str
-        Column in df holding the property category strings.
-    current_tax_col : str
-        Column holding the current (pre-LVT) tax per parcel.
-    new_tax_col : str
-        Column holding the modeled LVT tax per parcel.
-    tax_change_col : str
-        Column holding new_tax - current_tax.
-    tax_change_pct_col : str
-        Column holding (tax_change / current_tax) * 100. Null where current_tax == 0.
-    taxable_land_col : str
-        Column holding post-exemption taxable land value.
-    taxable_improvement_col : str
-        Column holding post-exemption taxable improvement value.
-    exempt_flag_col : str, optional
-        Column holding a boolean/binary fully-exempt flag. If None, is_fully_exempt
-        is derived as True where both taxable values are zero and current_tax is zero.
-    geoid_col : str
-        Column holding 12-digit Census block group GEOID (joined from census step).
-    income_col : str
-        Column holding block-group median household income.
-    minority_col : str
-        Column holding block-group minority percentage (0-100).
-    black_col : str
-        Column holding block-group Black/African American percentage (0-100).
-
-    Returns
-    -------
-    pd.DataFrame
-        The 16-column standardized dataframe that was written to CSV.
+    Returns a DataFrame indexed identically to ``df`` so callers can attach
+    geometry or other per-parcel columns by index alignment.
     """
-    import os
-
     required = [
         property_category_col, current_tax_col, new_tax_col,
         tax_change_col, taxable_land_col, taxable_improvement_col,
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"save_standard_export: missing required columns: {missing}")
+        raise ValueError(f"build_standard_export_frame: missing required columns: {missing}")
 
     out = pd.DataFrame(index=df.index)
 
@@ -1554,6 +1508,101 @@ def save_standard_export(
                 f"current ${total_current:,.0f}, new ${total_new:,.0f} "
                 f"({rev_diff_pct:.2f}% difference)"
             )
+
+    return out
+
+
+def save_standard_export(
+    df: pd.DataFrame,
+    city: str,
+    output_path: str,
+    model_type: str,
+    land_millage: float,
+    improvement_millage: float,
+    property_category_col: str = 'PROPERTY_CATEGORY',
+    current_tax_col: str = 'current_tax',
+    new_tax_col: str = 'new_tax',
+    tax_change_col: str = 'tax_change',
+    tax_change_pct_col: str = 'tax_change_pct',
+    taxable_land_col: str = 'taxable_land_value',
+    taxable_improvement_col: str = 'taxable_improvement_value',
+    exempt_flag_col: Optional[str] = None,
+    geoid_col: str = 'std_geoid',
+    income_col: str = 'median_income',
+    minority_col: str = 'minority_pct',
+    black_col: str = 'black_pct',
+) -> pd.DataFrame:
+    """
+    Build and save the 16-column standardized cross-city export CSV.
+
+    Emits warnings for non-standard property categories and if revenue
+    neutrality deviates beyond 1%, but does not raise errors for either.
+    Demographic columns (geoid, income, minority_pct, black_pct) are
+    included as null when not present in df.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Final modeled dataframe containing all required columns.
+    city : str
+        Lowercase slug, e.g. "baltimore". Used as the city column value.
+    output_path : str
+        File path for the output CSV (e.g. "../../analysis/data/baltimore.csv").
+    model_type : str
+        Encoded model description. Format: "<kind>:<param>[,<kind>:<param>]".
+        E.g. "split_rate:4.0", "abatement:100pct", "split_rate:4.0,exemption:50000".
+    land_millage : float
+        Effective land millage rate (per $1,000) from the model.
+    improvement_millage : float
+        Effective improvement millage rate (per $1,000) from the model.
+    property_category_col : str
+        Column in df holding the property category strings.
+    current_tax_col : str
+        Column holding the current (pre-LVT) tax per parcel.
+    new_tax_col : str
+        Column holding the modeled LVT tax per parcel.
+    tax_change_col : str
+        Column holding new_tax - current_tax.
+    tax_change_pct_col : str
+        Column holding (tax_change / current_tax) * 100. Null where current_tax == 0.
+    taxable_land_col : str
+        Column holding post-exemption taxable land value.
+    taxable_improvement_col : str
+        Column holding post-exemption taxable improvement value.
+    exempt_flag_col : str, optional
+        Column holding a boolean/binary fully-exempt flag. If None, is_fully_exempt
+        is derived as True where both taxable values are zero and current_tax is zero.
+    geoid_col : str
+        Column holding 12-digit Census block group GEOID (joined from census step).
+    income_col : str
+        Column holding block-group median household income.
+    minority_col : str
+        Column holding block-group minority percentage (0-100).
+    black_col : str
+        Column holding block-group Black/African American percentage (0-100).
+
+    Returns
+    -------
+    pd.DataFrame
+        The 16-column standardized dataframe that was written to CSV.
+    """
+    import os
+
+    out = build_standard_export_frame(
+        df, city, model_type, land_millage, improvement_millage,
+        property_category_col=property_category_col,
+        current_tax_col=current_tax_col,
+        new_tax_col=new_tax_col,
+        tax_change_col=tax_change_col,
+        tax_change_pct_col=tax_change_pct_col,
+        taxable_land_col=taxable_land_col,
+        taxable_improvement_col=taxable_improvement_col,
+        exempt_flag_col=exempt_flag_col,
+        geoid_col=geoid_col,
+        income_col=income_col,
+        minority_col=minority_col,
+        black_col=black_col,
+    )
 
     # Write
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
