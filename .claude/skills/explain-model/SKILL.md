@@ -69,6 +69,7 @@ For city slug `<city>`, locate and read (skip gracefully if absent):
 | Model notebook | `cities/<city>/model.ipynb` | Code + executed outputs — the authoritative record of what was run |
 | Standardized export | `analysis/data/<city>.csv` | 16-column cross-city export — recompute revenue, category, exemption, demographic coverage |
 | Cached parcel data | `cities/<city>/data/*.gpq`, `*.parquet`, `*.csv` | Deep-probe source (raw land/improvement values, classes, use codes) |
+| Interactive parcel map | `analysis/reports/<city>/parcel_map.html` (+ `<city>.pmtiles` if tiled) | The visual, parcel-level result — link it in your chat wrap-up so the reader can explore it |
 | Legality brief | `analysis/legal/<city>.md` | Which levy/vehicle the legal analysis assumed — cross-check against what was modeled |
 | Core utilities | `lvt/lvt_utils.py`, `lvt/census_utils.py` | Ground-truth the mechanics of the functions the notebook calls |
 
@@ -261,3 +262,4 @@ especially any limitation that changes how the results should be read.
 - [ ] Land-ratio uniformity probe run (deep) or explicitly skipped (fallback).
 - [ ] Limitations ranked, collapsed-signal artifacts first.
 - [ ] Written to `analysis/explainers/<city>.md`; path reported; not committed.
+- [ ] If `analysis/reports/<city>/parcel_map.html` exists, linked it in the chat wrap-up as the visual companion (`[Open the <City> parcel map](analysis/reports/<city>/parcel_map.html)`; for a tiled city, note `python3 scripts/serve_maps.py`).

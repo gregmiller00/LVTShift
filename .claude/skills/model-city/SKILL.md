@@ -172,6 +172,25 @@ Fully-exempt parcels are held out of the solver and **excluded from the export a
 
 ---
 
+### Step 5b — Show the user the interactive map (the headline deliverable)
+
+The `create_parcel_map` call in Section 7 writes `analysis/reports/<city>/parcel_map.html` — a
+color-coded, clickable map of every parcel (green = pays less, red = pays more; click a parcel for
+its values and county-record link; charts gallery at the bottom). This is the **one output a
+non-technical user can actually see and explore**, so **always surface it in chat when the pipeline
+finishes**, as the lead of your wrap-up:
+
+- **Self-contained cities** (below the tile threshold): give a clickable link to the file —
+  `[Open the <City> parcel map](analysis/reports/<city>/parcel_map.html)` — and note it opens in any
+  browser (double-click or the link).
+- **Large / tiled cities** (`create_parcel_map` printed `serve over http` because it built PMTiles):
+  the viewer needs a range-capable server. Tell the user: run `python3 scripts/serve_maps.py` from the
+  repo root, then open `http://localhost:8000/analysis/reports/<city>/parcel_map.html`.
+
+Say one line about what it shows. Lead with this — it's the thing the user came for.
+
+---
+
 ### Step 6 — Cross-city
 Re-run `analysis/cross_city.ipynb` to include the new city:
 ```bash
