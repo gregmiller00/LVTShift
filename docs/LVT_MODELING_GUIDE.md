@@ -161,3 +161,60 @@ jupyter nbconvert --to notebook --execute --inplace \
   --ExecutePreprocessor.kernel_name=python3 \
   cross_city.ipynb 2>&1
 ```
+
+---
+
+## Optional: Transit Walk-Shed Parking Analysis
+
+Quantifies how much land within a 10-minute walk of high-frequency transit is
+consumed by parking lots, and what a split-rate shift does to those parcels.
+First built as Step 9 of `cities/st_paul/model.ipynb` — copy that section and
+swap the city-specific pieces. All machinery lives in `lvt/transit_utils.py`.
+
+Requires `osmnx`, `folium`, and `mapclassify` (`pip install osmnx folium mapclassify`).
+
+```python
+from lvt.transit_utils import (
+    download_gtfs_from_mobility_database, gtfs_route_stops,
+    get_walk_network, route_walk_sheds, fetch_osm_parking,
+    flag_parking_parcels, walk_shed_stats,
+)
+
+# 1. GTFS: find the transit agency in the Mobility Database catalog
+gtfs_path = download_gtfs_from_mobility_database(
+    'data/gtfs.zip', provider='Valley Metro', subdivision='Arizona')
+gtfs = gtfs_route_stops(gtfs_path, route_selector='Light Rail')  # prefix or callable mask
+
+# 2. Filter stops to the city boundary, then route 800 m walk sheds
+#    (use the city's UTM zone, e.g. EPSG:26912 for Phoenix)
+G = get_walk_network(city_boundary_utm, 'EPSG:26912', 'data/walk.graphml')
+walk_sheds = route_walk_sheds(G, stops_utm, cutoff_m=800)
+
+# 3. OSM parking (assessor codes usually miss surface lots) + parcel flags
+osm_parking = fetch_osm_parking(city_boundary_gdf, 'data/osm_parking.gpkg', to_crs='EPSG:26912')
+parcels_flagged = flag_parking_parcels(modeled_parcels_utm, osm_parking.union_all(),
+                                       category_col='PROPERTY_CATEGORY')
+
+# 4. Stats per line (column names are parameters — match the city's schema)
+row = walk_shed_stats(walk_sheds.union_all(), all_parcels_utm, parcels_flagged,
+                      osm_parking.union_all(), label='All lines', n_stops=len(stops_utm),
+                      taxable_flag_col='pays_city_tax', new_tax_col='new_tax_tc')
+```
+
+City-specific decisions to revisit:
+- **Route selection**: `route_selector` — Twin Cities uses the `'METRO'` long-name
+  prefix; other agencies need a different prefix or a callable on the routes table.
+- **Walk-shed parameters**: 800 m cutoff (10 min at 80 m/min) and 60 m street
+  buffer (one parcel depth) are defaults, not constants of nature.
+- **Parking definition**: a parcel is a parking lot if its assessor category says
+  so or OSM parking covers ≥ 50% of it. Underground garages and on-street lanes
+  are excluded.
+- **Caching**: the walk graph (~60 MB GraphML) and routed sheds are cached in
+  `data/` — routing ~100 stops takes ~10 minutes fresh, seconds cached. GTFS and
+  OSM are living datasets; note the snapshot date.
+
+The St. Paul notebook also builds an interactive folium map (CartoDB positron,
+parking choropleth by underlying land value/acre, GTFS brand-colored route lines,
+a pinned per-line outcomes panel) and saves a standalone copy to
+`data/transit_parking_map.html`. The notebook must be `jupyter trust`-ed for the
+map to render inline.

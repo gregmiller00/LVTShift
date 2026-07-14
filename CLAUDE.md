@@ -64,13 +64,14 @@ When modifying the pipeline, change the skill files — they are the canonical s
 
 ## Architecture
 
-Five core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
+Six core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
 
 ```
 lvt/cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
 lvt/census_utils.py    → Fetch Census demographics, spatial join to parcels
 lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions)
 lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
+lvt/transit_utils.py   → GTFS feeds, routed walk-shed isochrones, OSM parking analysis
 lvt/viz.py             → Scatter plots, quintile analysis, demographic charts, city report
 lvt/parcel_map.py      → Per-parcel GeoParquet export + self-contained interactive HTML map
 ```

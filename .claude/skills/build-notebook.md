@@ -343,6 +343,14 @@ create_parcel_map(map_gdf, CITY_NAME)  # simplifies only the viewer geometry, no
 print("Done.")
 ```
 
+> **Metrics summary (automatic).** `create_city_report` also calls
+> `lvt.metrics.compute_city_metrics`, which writes `metrics_summary.md` and
+> `metrics_<city>.csv` into `analysis/reports/<city>/` and returns the metrics in the report
+> dict. No extra notebook code is needed. The summary reports the full modeled tax base, the
+> total dollars changed (Σ\|new − current\|) as a share of the modeled levy, and the value of
+> vacant + underdeveloped land (improvement ratio <10% / 10-25% / 25-50%) as a share of the
+> base. Roll up across cities with `lvt.metrics.rollup_city_metrics()`.
+
 `create_parcel_map` also embeds every report PNG sitting in `analysis/reports/<city>/`
 as a click-through chart gallery below the map, so it must run **after** `create_city_report`
 (and after any custom chart cells) — as it does in the closing pattern above.
