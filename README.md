@@ -67,6 +67,16 @@ Skills live in `.claude/skills/`. Each is a reference card the agent reads durin
 | `explain-model/SKILL.md` | Standalone (`/explain-model`) | Methodology audit of an existing city model |
 | `refine-model/SKILL.md` | Standalone (`/refine-model`) | Surgical re-run with changed parameters, before/after diff |
 
+**Policy analysis skills** (run after the model, each produces a local-only `.md` output in `analysis/`):
+
+| Skill | Command | What it produces |
+|---|---|---|
+| `legality-analyzer/SKILL.md` | `/legality-analyzer [city]` | Citation-heavy legal brief: 8 legal vehicles scored, pathway tier (1–8), primary sources; saved to `analysis/legal/<city>.md` |
+| `explain-model/SKILL.md` | `/explain-model [city]` | Plain-language methodology explainer: data sources, levies modeled, exemptions, limitations; saved to `analysis/explainers/<city>.md` |
+| `political-viability/SKILL.md` | `/political-viability [city]` | Political brief: current officials scored, electoral math from model CSV, coalition map, viability tier; saved to `analysis/political/<city>.md` |
+
+Recommended order: model the city → run `/legality-analyzer` (which officials hold the key votes depends on the legal pathway) → run `/political-viability` (uses legal brief to scope the right actors).
+
 For a thorough walkthrough of the modeling decisions — assessment ratios, per-levy abatements, Tax Capacity, derived millage, dual homestead rates — read **[docs/LVT_MODELING_GUIDE.md](docs/LVT_MODELING_GUIDE.md)**.
 
 ---
@@ -118,9 +128,19 @@ lvt/
 
 cities/<city>/model.ipynb    One notebook per city — the reproducible model
 analysis/
-  data/              Standard exported CSVs (one per city)
-  reports/           PNG charts (one folder per city)
-  cross_city.ipynb   Cross-city equity comparison
+  data/                  Standard exported CSVs (one per city)
+  reports/               PNG charts (one folder per city)
+  figures/cross_city/    Cross-city summary figures (4 PNGs + CSV table)
+  cross_city.ipynb       Cross-city equity comparison (interactive)
+  cross_city_figures.py  Script to regenerate cross-city figures
+  legal/                 LVT legal briefs per city (gitignored — local only)
+  explainers/            Model methodology explainers per city (gitignored — local only)
+  political/             Political viability briefs per city (gitignored — local only)
+
+scripts/
+  run_all_cities.py             Batch notebook runner (patches scrape flags, reports pass/fail)
+  patch_notebooks.py            Idempotent patches for ratio harmonization and bug fixes
+  map_philadelphia_tax_changes.py  Choropleth maps of tax change % by block group + council district
 
 .claude/skills/      Agent skill files (read by the agent during pipeline execution)
 .claude/commands/    Slash-command wrappers for the four user-facing skills
@@ -225,11 +245,84 @@ Census charts are generated when block-group income and minority data are availa
 
 ## Cities Modeled
 
-Complete models, each with a notebook, standardized export, and report:
+All runnable cities use a harmonized **4:1 split-rate** scenario (land taxed at 4× the improvement rate, revenue-neutral).
 
-Baltimore MD, Bellingham WA, Bryan TX, Charlottesville VA, Cincinnati OH, Cleveland OH, College Station TX, Fort Collins CO, Greeley CO, Highlands Ranch CO, Minneapolis MN, Pittsburgh PA, Pueblo CO, Rochester NY, Seattle WA, South Bend IN, Spokane WA, St. Paul MN, and Syracuse NY.
+| City | State | Parcels | Status | Key Notes |
+|---|---|---|---|---|
+| Baltimore | MD | 238K | ✓ CSV | Derived millage from tax bills |
+| Bellingham | WA | 41K | ✓ CSV | Whatcom County ArcGIS |
+| Bryan | TX | 30K | ✓ CSV | Brazos County |
+| Charlottesville | VA | 15K | ✓ CSV | Independent city (no county) |
+| Cleveland | OH | 158K | ✓ CSV | 35% Ohio assessment ratio |
+| College Station | TX | 28K | ✓ CSV | Brazos County |
+| Fort Collins | CO | 71K | ✓ CSV | Larimer County; per-tax-area modeling |
+| Greeley | CO | 33K | ✓ CSV | Weld County |
+| Highlands Ranch | CO | 16K | ✓ CSV | Douglas County |
+| Minneapolis | MN | 122.7K | ✓ CSV | Full tax bill; 4:1 split-rate |
+| Oak Forest | IL | 10.7K | ✓ CSV | Cook County PTAXSIM + CCAO AV; city levy only; data from sibling project |
+| Philadelphia | PA | 580K | ✓ CSV (4 variants) | OPA via Carto; city+school levy; 2024 vintage; 4 notebooks (OPA/LYCD × standard/post-abatement); maps in `analysis/reports/` |
+| Pittsburgh | PA | — | ✓ CSV | Condo collapse; city levy only |
+| Pueblo | CO | 47K | ✓ CSV | Pueblo County |
+| Rochester | NY | 58K | ✓ CSV | Homestead/non-homestead dual millage |
+| South Bend | IN | 44K | ✓ CSV | St. Joseph County |
+| St. Paul | MN | 72K | ✓ CSV | Full tax bill; Tax Capacity; condo collapse by PlatID |
+| Syracuse | NY | 42K | ✓ CSV | Onondaga County |
+| Tulsa | OK | — | ✓ CSV | Canonical single-notebook model |
+| Washington | DC | 122.3K | ✓ CSV | Unified city/county; current tax taken directly from OTR's per-parcel billed amount (`ANNUALTAX`); preserves Homestead Deduction + Senior/Disabled 50% relief in the reform |
+| Cincinnati | OH | — | ✗ Blocked | CAGIS ArcGIS source gone; no current endpoint with land values |
+| Spokane | WA | — | ✗ Blocked | Needs `charge_info_1/2.xlsx` manually downloaded from Spokane County |
+| Denver | CO | — | ✗ Stub | Depends on manually-assembled data files not in repo |
+| Morgantown | WV | — | ✗ Stub | Modeling section incomplete |
+| Scranton | PA | — | ✗ Stub | Data fetch only; no modeling |
 
-A few more (Denver, Morgantown, Scranton) are in progress. Each city's methodology — which levies were modeled, how exemptions were treated, what the land/improvement split rests on — is documented in its notebook and can be audited with `/explain-model <city>`.
+Each city's methodology — which levies were modeled, how exemptions were treated, what the land/improvement split rests on — is documented in its notebook and can be audited with `/explain-model <city>`.
+
+## Getting Started
+
+### Environment
+
+```bash
+git clone https://github.com/gregmiller00/LVTShift.git
+cd LVTShift
+pip install -r requirements.txt
+
+cp env.template .env
+# Add your Census API key (free at api.census.gov/data/key_signup.html)
+```
+
+The recommended Python environment is 3.11+ with `geopandas`, `pandas`, `matplotlib`, `census`, and `jupyter`. The Jupyter kernel is `python3` (miniconda default on Windows).
+
+### Run all cities (batch)
+
+```bash
+python scripts/run_all_cities.py                   # all 16 runnable cities
+python scripts/run_all_cities.py st_paul cleveland  # specific cities
+```
+
+The runner auto-detects missing data caches and patches `data_scrape = 0 → 1` when needed, so it always fetches fresh data on first run then uses the cache on subsequent runs.
+
+### Run a city manually
+
+```bash
+cd cities/st_paul
+jupyter nbconvert --to notebook --execute \
+  --output _executed.ipynb \
+  --ExecutePreprocessor.timeout=600 \
+  --ExecutePreprocessor.kernel_name=python3 \
+  model.ipynb
+```
+
+Each notebook auto-detects locally cached data and skips re-scraping if a recent file exists.
+
+### Cross-city analysis
+
+After CSVs exist in `analysis/data/`:
+
+```bash
+cd analysis
+python cross_city_figures.py   # saves 4 figures + summary table to figures/cross_city/
+jupyter nbconvert --to notebook --execute cross_city.ipynb  # full interactive analysis
+```
 
 ---
 
