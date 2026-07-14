@@ -29,9 +29,24 @@ STATE_FIPS = '08'              # 2-digit zero-padded
 COUNTY_FIPS = '069'            # 3-digit zero-padded
 MODEL_TYPE = 'split_rate_4to1' # or 'abatement_75pct', 'split_rate_10to1', etc.
 LAND_IMPROVEMENT_RATIO = 4.0   # for split-rate; omit if abatement
+
+# Parcel-map export (lvt/parcel_map.py) — per-parcel identity columns carried onto the
+# GeoParquet + interactive map but NOT the flat cross-city CSV. All optional: set to the
+# source column name when the data has it, else None.
+PARCEL_ID_COL = 'PARCEL_ID'    # parcel/account number shown to users; None if unavailable
+OWNER_NAME_COL = None          # e.g. 'OWNERNME1'
+OWNER_ADDRESS_COL = None       # e.g. 'SITEADDRESS'
+# Template with a {parcel_id} placeholder linking to the county's public record, e.g.
+# 'https://gis.county.gov/parcel?pin={parcel_id}'. None when the assessor portal has no
+# stable per-parcel deep link (many session-based CAMA portals do not).
+PARCEL_URL_TEMPLATE = None
 ```
 
 The `STATE_FIPS + COUNTY_FIPS` combined string is the FIPS code passed to Census.
+
+Find a working `PARCEL_URL_TEMPLATE` when you can — the county GIS/CAMA parcel-detail page
+often takes the parcel id as a query parameter (test one real id in a browser). Leave it `None`
+if the portal is session-based (no stable deep link) rather than emitting a link that 404s.
 
 ---
 
@@ -306,8 +321,45 @@ out_df = save_standard_export(
 # Standard report — 7 PNGs in analysis/reports/<city>/
 from lvt.viz import create_city_report
 create_city_report(out_df, CITY_NAME, show=False)
+
+# Parcel-map export — GeoParquet (geometry + tax outcomes + parcel id/owner/address) and a
+# self-contained interactive HTML map colored by tax change. gdf must still carry geometry
+# and the identity columns here — it does, since the model only ever row-filters gdf.
+from lvt.parcel_map import save_parcel_map_export, create_parcel_map
+map_gdf = save_parcel_map_export(
+    gdf=gdf,
+    city=CITY_NAME,
+    output_path=f'../../analysis/maps/{CITY_NAME}.parquet',
+    model_type=MODEL_TYPE,
+    land_millage=land_millage,
+    improvement_millage=improvement_millage,
+    parcel_id_col=PARCEL_ID_COL,
+    parcel_url_template=PARCEL_URL_TEMPLATE,
+    owner_name_col=OWNER_NAME_COL,
+    owner_address_col=OWNER_ADDRESS_COL,
+    # simplify_tolerance_m=None,  # optionally lighten the STORED geometry for huge cities
+)
+create_parcel_map(map_gdf, CITY_NAME)  # simplifies only the viewer geometry, not the parquet
 print("Done.")
 ```
+
+`create_parcel_map` also embeds every report PNG sitting in `analysis/reports/<city>/`
+as a click-through chart gallery below the map, so it must run **after** `create_city_report`
+(and after any custom chart cells) — as it does in the closing pattern above.
+
+For **large cities** (more than ~120k parcels) `create_parcel_map` automatically switches
+from the inline single-file HTML to **vector tiles**: it builds `analysis/reports/<city>/<city>.pmtiles`
+via tippecanoe and writes a MapLibre GL viewer. That tiled viewer must be opened over a
+**range-capable** web server (plain `python3 -m http.server` can't byte-serve the tiles) — run
+`python3 scripts/serve_maps.py` from the repo root and open the printed URL. Requires `tippecanoe`
+and `ogr2ogr` (GDAL) on PATH; if absent, it falls back to the inline Leaflet map with a warning.
+
+The parcel-map export is generic — it reuses the exact tax columns of the standard export
+(via the shared `build_standard_export_frame`) and just adds geometry + identity columns.
+It writes `analysis/maps/<city>.parquet` and `analysis/reports/<city>/parcel_map.html`
+(both gitignored). For very large cities (150k+ parcels) the embedded GeoJSON gets big; pass
+`simplify_tolerance_m` to `create_parcel_map` (default 2 m) to shrink the HTML, and consider
+`simplify_tolerance_m` on the export too if the parquet itself needs to be lighter.
 
 ---
 

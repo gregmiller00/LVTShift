@@ -66,14 +66,16 @@ print(gdf.groupby('PROPERTY_CATEGORY')[['current_tax', 'new_tax', 'tax_change_pc
 
 ## Gate 3 — Census Coverage
 
-Check the census join line in the notebook output:
+**The Census join is optional.** It only runs when a `CENSUS_API_KEY` is configured. If there is no key, the notebook prints `Census join: skipped (no CENSUS_API_KEY)` — this gate is **N/A**, not a failure. The model still produces the three core tax-impact charts (Gate 4), and the city passes. Only the four neighborhood-equity charts are skipped. Note this in a markdown cell so the missing charts read as intentional, and move on.
+
+When a key *is* configured, check the census join line in the notebook output:
 ```
 Census join: XX.X% matched
 ```
 
 **Pass**: ≥ 85% matched  
 **Acceptable**: 70–85% (note in a markdown cell why some parcels don't match — e.g., parcels on city border, water parcels, county slivers)  
-**Fail**: < 70% → investigate
+**Fail**: < 70% *with a key present* → investigate (a key was provided but the join still failed, so something is wrong with geometry/CRS/FIPS below)
 
 If coverage is low:
 1. Check that parcel geometries are valid: `gdf.geometry.is_valid.mean()`
@@ -92,14 +94,15 @@ print('Non-null pct:', df['median_income'].notna().mean())
 
 ---
 
-## Gate 4 — PNG Output
+## Gate 4 — PNG Output + parcel map
 
-Check that the standard report was generated:
+Check that the standard report and the parcel map were generated:
 ```bash
-ls -la analysis/reports/<city>/
+ls -la analysis/reports/<city>/     # PNGs + parcel_map.html
+ls -la analysis/maps/<city>.parquet # per-parcel GeoParquet
 ```
 
-Expected files (up to 7, depending on census coverage):
+Expected files (up to 7 PNGs, depending on census coverage):
 ```
 category_impact.png
 ten_pct_share.png
@@ -108,7 +111,13 @@ income_quintile_non_vacant.png        # only if census coverage ≥ 70%
 income_quintile_residential.png       # only if census coverage ≥ 70%
 minority_quintile_non_vacant.png      # only if census coverage ≥ 70%
 minority_quintile_residential.png     # only if census coverage ≥ 70%
+parcel_map.html                       # interactive per-parcel tax-change map
 ```
+
+Plus `analysis/maps/<city>.parquet` (geometry + tax outcomes + parcel id/owner/address).
+Spot-check the GeoParquet: `parcel_id` should be populated, and `parcel_url` populated too
+whenever a `PARCEL_URL_TEMPLATE` was set (0 links is expected only when the assessor portal
+has no stable deep link — confirm that was a deliberate `None`, not a wrong column name).
 
 If fewer than 3 PNGs exist, the report cell failed. Check the notebook output for errors.
 
@@ -205,6 +214,7 @@ Document in a notebook markdown cell:
 | Parcel count | 42,187 modeled city parcels (+1,803 fully-exempt held out & excluded from charts) |
 | Census coverage | 94.1% matched to block groups |
 | PNGs generated | 7 of 7 |
+| Parcel map | `analysis/maps/<city>.parquet` (N parcels) + `parcel_map.html`; parcel_url populated / N-A |
 | Artifact scan (Gate 5) | Clean — building shares plausible by category; no ceiling clustering; base reconciles within 4% |
 | SFR median change | -8.4% |
 | Vacant land median change | +134.2% |

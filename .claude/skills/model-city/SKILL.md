@@ -63,32 +63,42 @@ Write the city notebook following the canonical 7-section template. The census j
 
 **Required closing cells (exact pattern):**
 ```python
-# Census join — must happen before export
+# Census join — OPTIONAL, must happen before export
+import os
 import concurrent.futures
 from lvt.census_utils import get_census_data_with_boundaries, match_to_census_blockgroups
 
 _fips = STATE_FIPS + COUNTY_FIPS
-try:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
-        _future = _ex.submit(get_census_data_with_boundaries, _fips, 2022)
-        try:
-            census_data, census_gdf = _future.result(timeout=90)
-            df = match_to_census_blockgroups(df, census_gdf)
-            # Merge demographic attributes onto df by std_geoid
-            _demo_cols = ['std_geoid', 'median_income', 'minority_pct', 'black_pct', 'total_pop']
-            df = df.merge(
-                census_data[[c for c in _demo_cols if c in census_data.columns]],
-                on='std_geoid', how='left'
-            )
-            print(f"Census join: {df['std_geoid'].notna().mean()*100:.1f}% matched")
-        except concurrent.futures.TimeoutError:
-            print("Census API timed out — skipping census join")
-            for _col in ['std_geoid', 'median_income', 'minority_pct', 'black_pct']:
-                df[_col] = float('nan')
-except Exception as e:
-    print(f"Census join failed: {e}")
-    for _col in ['std_geoid', 'median_income', 'minority_pct', 'black_pct']:
+_census_cols = ['std_geoid', 'median_income', 'minority_pct', 'black_pct']
+if not os.getenv('CENSUS_API_KEY'):
+    # No key configured — the census join is optional, so skip it cleanly.
+    # The model still produces the three core tax-impact charts; only the four
+    # neighborhood-equity charts are skipped. This is expected, not a failure.
+    print("Census join: skipped (no CENSUS_API_KEY)")
+    for _col in _census_cols:
         df[_col] = float('nan')
+else:
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            _future = _ex.submit(get_census_data_with_boundaries, _fips, 2022)
+            try:
+                census_data, census_gdf = _future.result(timeout=90)
+                df = match_to_census_blockgroups(df, census_gdf)
+                # Merge demographic attributes onto df by std_geoid
+                _demo_cols = ['std_geoid', 'median_income', 'minority_pct', 'black_pct', 'total_pop']
+                df = df.merge(
+                    census_data[[c for c in _demo_cols if c in census_data.columns]],
+                    on='std_geoid', how='left'
+                )
+                print(f"Census join: {df['std_geoid'].notna().mean()*100:.1f}% matched")
+            except concurrent.futures.TimeoutError:
+                print("Census API timed out — skipping census join")
+                for _col in _census_cols:
+                    df[_col] = float('nan')
+    except Exception as e:
+        print(f"Census join failed: {e}")
+        for _col in _census_cols:
+            df[_col] = float('nan')
 
 # Export — df must have census columns by this point
 from lvt.lvt_utils import save_standard_export
@@ -111,6 +121,23 @@ out_df = save_standard_export(
 # Standard report — 7 PNGs in analysis/reports/<city>/
 from lvt.viz import create_city_report
 create_city_report(out_df, CITY_NAME, show=False)
+
+# Parcel-map export — GeoParquet + self-contained interactive HTML map (see build-notebook.md
+# for the header constants PARCEL_ID_COL / OWNER_NAME_COL / OWNER_ADDRESS_COL / PARCEL_URL_TEMPLATE).
+from lvt.parcel_map import save_parcel_map_export, create_parcel_map
+map_gdf = save_parcel_map_export(
+    gdf=gdf,
+    city=CITY_NAME,
+    output_path=f'../../analysis/maps/{CITY_NAME}.parquet',
+    model_type=MODEL_TYPE,
+    land_millage=land_millage,
+    improvement_millage=improvement_millage,
+    parcel_id_col=PARCEL_ID_COL,
+    parcel_url_template=PARCEL_URL_TEMPLATE,
+    owner_name_col=OWNER_NAME_COL,
+    owner_address_col=OWNER_ADDRESS_COL,
+)
+create_parcel_map(map_gdf, CITY_NAME)
 print("Done.")
 ```
 
