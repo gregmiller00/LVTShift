@@ -347,7 +347,7 @@ print("Done.")
 as a click-through chart gallery below the map, so it must run **after** `create_city_report`
 (and after any custom chart cells) — as it does in the closing pattern above.
 
-For **large cities** (more than ~120k parcels) `create_parcel_map` automatically switches
+For **large cities** (more than ~100k parcels) `create_parcel_map` automatically switches
 from the inline single-file HTML to **vector tiles**: it builds `analysis/reports/<city>/<city>.pmtiles`
 via tippecanoe and writes a MapLibre GL viewer. That tiled viewer must be opened over a
 **range-capable** web server (plain `python3 -m http.server` can't byte-serve the tiles) — run

@@ -215,7 +215,7 @@ def create_parcel_map(
     coord_precision: int = 5,
     simplify_tolerance_m: Optional[float] = 2.0,
     title: Optional[str] = None,
-    tile_threshold: Optional[int] = 120_000,
+    tile_threshold: Optional[int] = 100_000,
 ) -> str:
     """Render an interactive HTML parcel map.
 
