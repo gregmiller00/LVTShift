@@ -145,7 +145,7 @@ def fetch_lodes_wac(
 
     url = (
         f"https://lehd.ces.census.gov/data/lodes/{lodes_version}/{state_abbr}/wac/"
-        f"{state_abbr}_wac_{segment}_{year}.csv.gz"
+        f"{state_abbr}_wac_S000_{segment}_{year}.csv.gz"
     )
     df = pd.read_csv(url, dtype={'w_geocode': str}, compression='gzip')
 
