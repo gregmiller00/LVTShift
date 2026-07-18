@@ -97,6 +97,10 @@ For overlapping taxing districts (county / municipality / school), use `model_mu
 
 **Fairness lens.** Beyond who-wins/loses, score the analysis the way an IAAO ratio study would. `assessment_ratio_stats(df, assessed_col, market_col)` measures how (un)fair the *current* base is — median ratio (level), COD (uniformity / horizontal equity), and PRD / PRB (regressivity / vertical equity), each with IAAO-standard flags. `reassessment_equity(df, ...)` stratifies the winners/losers by income quintile, racial-composition band (IAAO §7.3), and value decile (pass `value_col` — the vertical equity of the shift), with optional per-stratum current-base COD (`ratio_cols`) and bootstrap confidence intervals (`n_boot`, so thin strata aren't read as precise). `lvt.viz.reassessment_equity_chart` renders any breakdown (median change + % winners, with the COD gradient overlaid). See Part D of `cities/reading/model_reassessment.ipynb`.
 
+### Wage-Tax-for-Land-Tax Swap (different tax instrument, not a property-tax reform)
+
+Model eliminating a non-property tax (e.g. Philadelphia's Wage & Earnings Tax) and replacing its revenue with a new, separate, pure land value tax — the existing property tax is left untouched. This is a different modeling paradigm than the reforms above: there's no parcel-level wage data, so the analysis runs at census tract granularity for the eliminated tax and rolls the parcel-level modeled land tax up to the same tracts for comparison. Use `lvt.wage_tax_utils` together with the tract-level fetch functions in `lvt.census_utils` (`get_census_tract_data`, `get_census_tracts_shapefile`, `match_to_census_tracts`, `aggregate_parcels_to_geography`). See **`docs/WAGE_TAX_SWAP_GUIDE.md`** for the full methodology, data sources, and limitations, and `cities/philadelphia/model_wage_tax_swap.ipynb` for the worked example.
+
 ---
 
 ## Property Categories

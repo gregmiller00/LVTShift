@@ -1429,6 +1429,178 @@ def create_city_report(
     }
 
 
+def _make_incidence_shift_chart(
+    resident_wage_tax_total: float,
+    nonresident_wage_tax_total: float,
+    new_land_tax_total: float,
+    city_title: str,
+) -> plt.Figure:
+    """3-bar chart: who paid the eliminated wage tax vs. who pays the new land tax.
+
+    Makes the commuter-transfer finding visible rather than just printed: the
+    non-resident bar represents revenue paid overwhelmingly by people who live
+    outside city limits, which the new land tax shifts entirely onto city
+    landowners.
+    """
+    labels = ['Resident wage tax\n(eliminated)', 'Non-resident wage tax\n(eliminated)',
+              'New land tax\n(raised)']
+    values = [resident_wage_tax_total, nonresident_wage_tax_total, new_land_tax_total]
+    colors = ['#4c78a8', '#f58518', '#54a24b']
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    bars = ax.bar(labels, values, color=colors, width=0.6)
+    for bar, val in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, val, f'${val/1e9:.2f}B',
+                ha='center', va='bottom', fontsize=12, fontweight='bold')
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.set_ylabel('Annual revenue ($)', fontsize=12)
+    ax.set_title(f'Wage Tax → Land Tax: Who Pays — {city_title}', fontsize=14, fontweight='bold')
+    fig.tight_layout()
+    return fig
+
+
+def create_wage_tax_swap_report(
+    tract_gdf: gpd.GeoDataFrame,
+    city: str,
+    output_dir: str = '../../analysis/reports',
+    show: bool = True,
+    *,
+    change_col: str = 'net_change',
+    change_pct_col: str = 'net_change_pct',
+    current_col: str = 'current_wage_tax',
+    new_col: str = 'new_land_tax',
+    income_col: str = 'median_income',
+    minority_col: str = 'minority_pct',
+    resident_wage_tax_total: Optional[float] = None,
+    nonresident_wage_tax_total: Optional[float] = None,
+) -> dict:
+    """
+    Generate tract-level report charts for a wage-tax-for-land-tax swap analysis.
+
+    Tract-level sibling of create_city_report(), for the wage-tax-swap modeling
+    paradigm in lvt.wage_tax_utils: geographic unit is the census tract, not the
+    parcel, and "current"/"new" refer to two different tax instruments (wage tax
+    eliminated vs. new land-only tax), not two vintages of the same property tax.
+
+    Saves PNGs to ``{output_dir}/{city}/``:
+
+    - ``net_change_map.png``       — tract choropleth of dollar net change.
+    - ``net_change_pct_map.png``   — tract choropleth of percent net change.
+    - ``income_quintile.png``      — median net change % by income quintile.
+    - ``minority_quintile.png``    — median net change % by minority-pct quintile.
+    - ``distribution.png``         — histogram of tract-level net change %.
+    - ``incidence_shift.png``      — resident wage tax vs. non-resident wage tax
+      vs. new land tax, only produced when both wage-tax totals are supplied.
+
+    Parameters
+    ----------
+    tract_gdf : gpd.GeoDataFrame
+        Tract-level data with geometry and `change_col`/`change_pct_col`/
+        `current_col`/`new_col` (as produced by
+        save_wage_tax_swap_tract_export() merged back onto tract boundaries).
+    city : str
+        City slug used for output file names and sub-directory.
+    output_dir : str
+        Parent directory for PNGs.
+    show : bool
+        Display figures inline when True (Jupyter). Use False for headless runs.
+    change_col, change_pct_col, current_col, new_col : str
+        Column names in tract_gdf.
+    income_col, minority_col : str
+        Demographic columns for quintile charts, if present.
+    resident_wage_tax_total, nonresident_wage_tax_total : float, optional
+        Citywide totals from compute_wage_tax_revenue_target(). When both are
+        given, the incidence_shift.png chart is produced.
+
+    Returns
+    -------
+    dict
+        ``row_count``, ``current_revenue``, ``new_revenue``, ``charts_saved``.
+    """
+    import os
+
+    city_dir = os.path.join(output_dir, city)
+    os.makedirs(city_dir, exist_ok=True)
+    charts_saved: List[str] = []
+    city_title = city.replace('_', ' ').title()
+
+    df = tract_gdf.copy()
+
+    def _save_fig(fig: Optional[plt.Figure], fname: str) -> None:
+        if fig is None:
+            return
+        p = os.path.join(city_dir, fname)
+        fig.savefig(p, dpi=150, bbox_inches='tight')
+        charts_saved.append(p)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # Choropleth maps
+    # ------------------------------------------------------------------
+    for col, fname, cmap, label in [
+        (change_col, 'net_change_map.png', 'RdYlGn_r', 'Net change ($)'),
+        (change_pct_col, 'net_change_pct_map.png', 'RdYlGn_r', 'Net change (%)'),
+    ]:
+        if col not in df.columns or not df[col].notna().any():
+            continue
+        fig, ax = plt.subplots(figsize=(12, 10))
+        df.plot(column=col, cmap=cmap, ax=ax, legend=True,
+                 legend_kwds={'label': label, 'shrink': 0.8})
+        ax.set_title(f'{label} by Tract — {city_title}', fontsize=15, pad=16)
+        ax.set_axis_off()
+        fig.tight_layout()
+        _save_fig(fig, fname)
+
+    # ------------------------------------------------------------------
+    # Quintile + distribution charts — reuse the parcel-report helpers, which
+    # are hardcoded to the 'tax_change_pct' column name, by presenting them a
+    # renamed view rather than duplicating chart logic.
+    # ------------------------------------------------------------------
+    quintile_df = df.rename(columns={change_pct_col: 'tax_change_pct'})
+
+    if income_col in df.columns and df[income_col].notna().any():
+        _save_fig(
+            _make_quintile_chart(quintile_df, income_col, 'Neighborhood Income',
+                                  city_title, 'By Census Tract'),
+            'income_quintile.png',
+        )
+    if minority_col in df.columns and df[minority_col].notna().any():
+        _save_fig(
+            _make_quintile_chart(quintile_df, minority_col, 'Minority Percentage',
+                                  city_title, 'By Census Tract'),
+            'minority_quintile.png',
+        )
+    if change_pct_col in df.columns and df[change_pct_col].notna().any():
+        _save_fig(_make_distribution_chart(quintile_df, city_title), 'distribution.png')
+
+    # ------------------------------------------------------------------
+    # Incidence-shift chart — the commuter-transfer finding, made visible
+    # ------------------------------------------------------------------
+    if resident_wage_tax_total is not None and nonresident_wage_tax_total is not None:
+        new_land_tax_total = float(df[new_col].sum()) if new_col in df.columns else np.nan
+        _save_fig(
+            _make_incidence_shift_chart(
+                resident_wage_tax_total, nonresident_wage_tax_total,
+                new_land_tax_total, city_title,
+            ),
+            'incidence_shift.png',
+        )
+
+    current_rev = float(df[current_col].sum()) if current_col in df.columns else np.nan
+    new_rev = float(df[new_col].sum()) if new_col in df.columns else np.nan
+
+    return {
+        'row_count': len(df),
+        'current_revenue': current_rev,
+        'new_revenue': new_rev,
+        'charts_saved': charts_saved,
+    }
+
+
 def quintile_progressivity_chart(
     df: pd.DataFrame,
     quintile_col: str,
