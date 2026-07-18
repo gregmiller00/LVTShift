@@ -121,6 +121,361 @@ def get_census_data(
 
     return df
 
+def get_census_tract_data(
+    fips_code: str,
+    year: int = 2022,
+    api_key: str = None,
+    extra_variables: Optional[List[str]] = None,
+    column_aliases: Optional[Dict[str, str]] = None,
+) -> pd.DataFrame:
+    """
+    Get Census demographic data for census tracts in a given FIPS code.
+
+    Tract-level sibling of get_census_data(). Use this instead of the block-group
+    version when the analysis needs aggregate dollar totals (e.g. aggregate wage
+    income, B19062) rather than per-capita/rate statistics — block-group aggregates
+    carry much larger relative margins of error for low-population geographies.
+
+    Args:
+        fips_code (str): 5-digit FIPS code (state + county)
+        year (int): Census year to query (default: 2022)
+        api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
+        extra_variables (list of str, optional): Additional ACS variable codes to fetch
+            (e.g. ["B19062_001E"] for aggregate wage/salary income). They appear as
+            columns in the returned DataFrame alongside the fixed default set.
+            Negative values are coerced to NaN.
+        column_aliases (dict, optional): Rename map applied after fetch, e.g.
+            {"B19062_001E": "agg_wage_income"}. Only applies to extras — the default
+            columns (median_income, total_pop, etc.) are not affected.
+
+    Returns:
+        pd.DataFrame: DataFrame containing Census demographic data, keyed by
+            `tract_geoid` (11-digit state+county+tract).
+
+    Raises:
+        TypeError: If fips_code is not a string or year is not an int
+        ValueError: If fips_code is not 5 digits or api_key is not provided
+    """
+    if not isinstance(fips_code, str):
+        raise TypeError("fips_code must be a string")
+    if not isinstance(year, int):
+        raise TypeError("year must be an integer")
+    if len(fips_code) != 5:
+        raise ValueError("fips_code must be 5 digits (state + county)")
+
+    if not api_key:
+        api_key = os.getenv('CENSUS_API_KEY')
+    if not api_key:
+        raise ValueError("Census API key must be provided either as parameter or in CENSUS_API_KEY environment variable")
+
+    c = Census(api_key)
+
+    state_fips = fips_code[:2]
+    county_fips = fips_code[2:]
+
+    default_fields = [
+        'NAME',
+        'B19013_001E',  # Median income
+        'B01003_001E',  # Total population
+        'B03002_003E',  # White alone
+        'B03002_004E',  # Black alone
+        'B03002_012E',  # Hispanic/Latino
+    ]
+    extras = list(extra_variables) if extra_variables else []
+    fields = list(dict.fromkeys(default_fields + extras))
+
+    data = c.acs5.state_county_tract(
+        fields=fields,
+        state_fips=state_fips,
+        county_fips=county_fips,
+        tract='*',
+        year=year,
+    )
+
+    df = pd.DataFrame(data)
+
+    df = df.rename(columns={
+        'B19013_001E': 'median_income',
+        'B01003_001E': 'total_pop',
+        'B03002_003E': 'white_pop',
+        'B03002_004E': 'black_pop',
+        'B03002_012E': 'hispanic_pop',
+    })
+
+    # Create GEOID for tracts (state+county+tract)
+    df['state_fips'] = df['state']
+    df['county_fips'] = df['county']
+    df['tract_fips'] = df['tract']
+
+    df['tract_geoid'] = df['state_fips'] + df['county_fips'] + df['tract_fips']
+
+    numeric_cols = ['median_income', 'total_pop', 'white_pop', 'black_pop', 'hispanic_pop'] + extras
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.loc[df[col] < 0, col] = np.nan
+
+    df['minority_pct'] = ((df['total_pop'] - df['white_pop']) / df['total_pop'] * 100).round(2)
+    df['black_pct'] = (df['black_pop'] / df['total_pop'] * 100).round(2)
+
+    if column_aliases:
+        df = df.rename(columns=column_aliases)
+
+    return df
+
+def get_census_tracts_shapefile(fips_code: str) -> gpd.GeoDataFrame:
+    """
+    Get Census Tract shapefiles for a given FIPS code from the Census TIGERweb service.
+
+    Tract-level sibling of get_census_blockgroups_shapefile(). Uses TIGERweb
+    `Tracts_Blocks/MapServer/4` ("Census Tracts") — the polygon-geometry sibling of
+    the block-group Layer 1. Note Layer 8 in the same service (used elsewhere in this
+    module for block-group chunking) returns tract *numbers* only, not tract polygons.
+
+    Args:
+        fips_code (str): 5-digit FIPS code (state + county)
+
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame containing Census Tract boundaries, keyed by
+            `tract_geoid` (11-digit state+county+tract).
+
+    Raises:
+        TypeError: If fips_code is not a string
+        ValueError: If fips_code is not 5 digits
+        requests.RequestException: If API request fails
+    """
+    if not isinstance(fips_code, str):
+        raise TypeError("fips_code must be a string")
+    if len(fips_code) != 5:
+        raise ValueError("fips_code must be 5 digits (state + county)")
+
+    state_fips = fips_code[:2]
+    county_fips = fips_code[2:]
+    base_url = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Tracts_Blocks/MapServer/4/query"
+
+    all_tracts = []
+    result_offset = 0
+    page_size = 1000
+
+    try:
+        while True:
+            params = {
+                'where': f"STATE='{state_fips}' AND COUNTY='{county_fips}'",
+                'outFields': '*',
+                'returnGeometry': 'true',
+                'f': 'geojson',
+                'outSR': '4326',
+                'resultOffset': result_offset,
+                'resultRecordCount': page_size,
+            }
+            response = requests.get(base_url, params=params)
+            response.raise_for_status()
+
+            content_type = response.headers.get('content-type', '').lower()
+            if 'html' in content_type:
+                raise ValueError("Received HTML response instead of JSON - likely request rejected")
+
+            geojson_data = response.json()
+            features = geojson_data.get('features', [])
+            if features:
+                all_tracts.append(gpd.GeoDataFrame.from_features(features))
+
+            if not geojson_data.get('properties', {}).get('exceededTransferLimit', False):
+                break
+            result_offset += page_size
+
+        if not all_tracts:
+            raise ValueError(f"No census tracts found for county {fips_code}")
+
+        gdf = gpd.GeoDataFrame(
+            pd.concat(all_tracts, ignore_index=True),
+            geometry="geometry",
+            crs="EPSG:4326",
+        )
+
+        gdf['state_fips'] = gdf['STATE']
+        gdf['county_fips'] = gdf['COUNTY']
+        gdf['tract_fips'] = gdf['TRACT']
+        gdf['tract_geoid'] = gdf['state_fips'] + gdf['county_fips'] + gdf['tract_fips']
+
+        return gdf
+
+    except (requests.RequestException, ValueError, KeyError) as e:
+        print(f"⚠️ Direct request failed: {str(e)}")
+        print(f"🔧 Falling back to Census FTP for county {fips_code}")
+        return get_census_tracts_from_ftp(fips_code)
+
+def get_census_tracts_from_ftp(fips_code: str, year: int = 2022) -> gpd.GeoDataFrame:
+    """
+    Alternative method: Download Census Tract shapefiles from the Census FTP server.
+    Fallback for get_census_tracts_shapefile() when the TIGERweb API fails.
+
+    Args:
+        fips_code (str): 5-digit FIPS code (state + county)
+        year (int): Census year (default: 2022)
+
+    Returns:
+        gpd.GeoDataFrame: GeoDataFrame containing Census Tract boundaries
+    """
+    import zipfile
+    import tempfile
+    import urllib.request
+
+    if not isinstance(fips_code, str):
+        raise TypeError("fips_code must be a string")
+    if len(fips_code) != 5:
+        raise ValueError("fips_code must be 5 digits (state + county)")
+
+    state_fips = fips_code[:2]
+    county_fips = fips_code[2:]
+
+    ftp_url = f"https://www2.census.gov/geo/tiger/TIGER{year}/TRACT/tl_{year}_{state_fips}_tract.zip"
+
+    print(f"📥 Downloading census tracts for state {state_fips} from Census FTP...")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        zip_path = os.path.join(temp_dir, f"tl_{year}_{state_fips}_tract.zip")
+        try:
+            urllib.request.urlretrieve(ftp_url, zip_path)
+
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+
+            shp_files = [f for f in os.listdir(temp_dir) if f.endswith('.shp')]
+            if not shp_files:
+                raise FileNotFoundError("No shapefile found in downloaded zip")
+
+            shp_path = os.path.join(temp_dir, shp_files[0])
+            gdf = gpd.read_file(shp_path)
+
+            filtered_gdf = gdf[gdf['COUNTYFP'] == county_fips].copy()
+            if len(filtered_gdf) == 0:
+                raise ValueError(f"No census tracts found for county {fips_code}")
+
+            filtered_gdf = filtered_gdf.rename(columns={
+                'STATEFP': 'STATE',
+                'COUNTYFP': 'COUNTY',
+                'TRACTCE': 'TRACT',
+            })
+
+            filtered_gdf['state_fips'] = filtered_gdf['STATE']
+            filtered_gdf['county_fips'] = filtered_gdf['COUNTY']
+            filtered_gdf['tract_fips'] = filtered_gdf['TRACT']
+            filtered_gdf['tract_geoid'] = filtered_gdf['state_fips'] + filtered_gdf['county_fips'] + filtered_gdf['tract_fips']
+
+            if filtered_gdf.crs != 'EPSG:4326':
+                filtered_gdf = filtered_gdf.to_crs('EPSG:4326')
+
+            return filtered_gdf
+
+        except Exception as e:
+            raise Exception(f"Failed to download/process Census tract data from FTP: {str(e)}")
+
+def get_census_tract_data_with_boundaries(
+    fips_code: str,
+    year: int = 2022,
+    api_key: str = None,
+    extra_variables: Optional[List[str]] = None,
+    column_aliases: Optional[Dict[str, str]] = None,
+) -> Tuple[pd.DataFrame, gpd.GeoDataFrame]:
+    """
+    Get both Census demographic data and boundary files for tracts in a FIPS code.
+
+    Tract-level sibling of get_census_data_with_boundaries().
+
+    Args:
+        fips_code (str): 5-digit FIPS code (state + county)
+        year (int): Census year to query (default: 2022)
+        api_key (str): Census API key. If None, will try to load from CENSUS_API_KEY environment variable.
+        extra_variables (list of str, optional): Additional ACS variable codes to fetch.
+        column_aliases (dict, optional): Rename map applied to the extras.
+
+    Returns:
+        Tuple[pd.DataFrame, gpd.GeoDataFrame]:
+            - Census demographic data DataFrame
+            - Census Tract boundaries GeoDataFrame
+    """
+    census_data = get_census_tract_data(
+        fips_code, year, api_key,
+        extra_variables=extra_variables,
+        column_aliases=column_aliases,
+    )
+
+    census_boundaries = get_census_tracts_shapefile(fips_code)
+
+    census_boundaries = census_boundaries.merge(
+        census_data,
+        on='tract_geoid',
+        how='left',
+        suffixes=('', '_census')
+    )
+    census_boundaries = census_boundaries.loc[:, ~census_boundaries.columns.str.endswith('_census')]
+    census_boundaries = gpd.GeoDataFrame(
+        census_boundaries,
+        geometry='geometry',
+        crs=census_boundaries.crs or "EPSG:4326"
+    )
+
+    return census_data, census_boundaries
+
+def match_to_census_tracts(
+    gdf: gpd.GeoDataFrame,
+    tract_gdf: gpd.GeoDataFrame,
+    join_type: str = "left",
+) -> gpd.GeoDataFrame:
+    """
+    Match each row in a GeoDataFrame to its corresponding Census Tract via spatial join.
+
+    Thin, clearly-named wrapper around match_to_census_blockgroups(), which is
+    already geometry-agnostic (centroid-based sjoin against whatever polygon set is
+    passed) — no tract-specific join logic is needed.
+    """
+    return match_to_census_blockgroups(gdf, tract_gdf, join_type=join_type)
+
+def aggregate_parcels_to_geography(
+    parcels_gdf: gpd.GeoDataFrame,
+    geo_gdf: gpd.GeoDataFrame,
+    value_cols: List[str],
+    geo_id_col: str = "tract_geoid",
+    agg: str = "sum",
+) -> pd.DataFrame:
+    """
+    Roll up parcel-level values to an arbitrary geography (tract, block group, ...).
+
+    Spatially joins parcels to the given geography boundaries via
+    match_to_census_tracts()/match_to_census_blockgroups() (same centroid-based sjoin
+    either way), then groups by `geo_id_col` and aggregates `value_cols`.
+
+    Parameters
+    ----------
+    parcels_gdf : gpd.GeoDataFrame
+        Parcel-level data with geometry.
+    geo_gdf : gpd.GeoDataFrame
+        Geography boundaries containing `geo_id_col` (e.g. a tract or block-group
+        GeoDataFrame from get_census_tracts_shapefile()/get_census_blockgroups_shapefile()).
+    value_cols : list of str
+        Parcel-level numeric columns to aggregate (e.g. ["new_tax"]).
+    geo_id_col : str, default "tract_geoid"
+        Geography ID column present in `geo_gdf` to group by.
+    agg : str, default "sum"
+        Aggregation function passed to groupby(...).agg().
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per geography unit with aggregated `value_cols`.
+    """
+    if geo_id_col not in geo_gdf.columns:
+        raise ValueError(f"geo_id_col '{geo_id_col}' not found in geo_gdf")
+    for col in value_cols:
+        if col not in parcels_gdf.columns:
+            raise ValueError(f"value column '{col}' not found in parcels_gdf")
+
+    joined = match_to_census_blockgroups(
+        parcels_gdf, geo_gdf[[geo_id_col, 'geometry']], join_type='left'
+    )
+    return joined.groupby(geo_id_col)[value_cols].agg(agg).reset_index()
+
 def get_census_blockgroups_shapefile_chunked(fips_code: str, max_retries: int = 3) -> gpd.GeoDataFrame:
     """
     Get Census Block Group shapefiles for large counties by fetching tract by tract.
@@ -717,16 +1072,22 @@ def create_demographic_summary(
     return summary
 
 
-def normalize_acs_geoid(series: pd.Series) -> pd.Series:
+def normalize_acs_geoid(series: pd.Series, width: int = 12) -> pd.Series:
     """
-    Convert ACS API `GEO_ID` (e.g. "1500000US191530101001") to 12-char block-group key.
+    Convert ACS API `GEO_ID` (e.g. "1500000US191530101001") to a bare FIPS key.
 
-    The Census ACS API returns a 20-character GEO_ID with a 7-character prefix
-    ("1500000US" for block groups); TIGER block-group shapefiles use the bare
-    12-character SSSCCCTTTTTTB key. This helper strips the prefix safely whether
-    the prefix is present or not.
+    The Census ACS API returns a 20-character GEO_ID with a prefix identifying the
+    summary level ("1500000US" for block groups, "1400000US" for tracts); TIGER
+    shapefiles use the bare key. This helper strips the prefix safely whether the
+    prefix is present or not.
+
+    Args:
+        series: GEO_ID values to normalize.
+        width: Length of the bare key to keep — 12 for block groups
+            (SSSCCCTTTTTTB, the default, preserving existing callers), 11 for
+            tracts (SSSCCCTTTTTT).
 
     Returns a string Series. NaN inputs become "".
     """
     s = series.fillna("").astype(str)
-    return s.str.replace(r"^[0-9A-Z]+US", "", regex=True).str[-12:]
+    return s.str.replace(r"^[0-9A-Z]+US", "", regex=True).str[-width:]
