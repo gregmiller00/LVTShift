@@ -50,6 +50,8 @@ STRONGHOLD_QUANTILE = 0.75  # top-quartile vote-share precincts = Parker's stron
 VARIANT_LABELS = {
     "philadelphia_lycd": "LYCD pre-abatement",
     "philadelphia_lycd_post_abatement": "LYCD post-abatement",
+    "philadelphia": "OPA pre-abatement",
+    "philadelphia_post_abatement": "OPA post-abatement",
 }
 VARIANT = sys.argv[1] if len(sys.argv) > 1 else "philadelphia_lycd"
 VARIANT_LABEL = VARIANT_LABELS.get(VARIANT, VARIANT)

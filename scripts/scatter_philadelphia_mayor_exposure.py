@@ -84,9 +84,14 @@ def main():
 
     ax.set_xlabel("Mayor Parker's vote share in precinct (2023 Democratic primary, 9-candidate field)", fontsize=10)
     ax.set_ylabel(f"% of SFR parcels with a tax decrease ({VARIANT_LABEL} model)", fontsize=10)
+    if abs(r) < 0.1 or p >= 0.05:
+        headline = "No meaningful relationship between Parker's electoral strength and reform winners/losers"
+    elif r < 0:
+        headline = "Parker's strongest precincts skew toward weaker reform outcomes"
+    else:
+        headline = "Parker's strongest precincts skew toward stronger reform outcomes"
     ax.set_title(
-        "No relationship between Parker's electoral strength and reform winners/losers\n"
-        f"Philadelphia precincts, LVT split-rate reform ({VARIANT_LABEL})",
+        f"{headline}\nPhiladelphia precincts, LVT split-rate reform ({VARIANT_LABEL})",
         fontsize=12,
         fontweight="bold",
     )
