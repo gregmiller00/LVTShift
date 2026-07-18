@@ -228,6 +228,31 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
 
+### Philadelphia — Wage Tax Swap
+
+`cities/philadelphia/model_wage_tax_swap.ipynb` is a fifth Philadelphia notebook, but it doesn't
+follow the standard 7-section template or the standard `analysis/data/philadelphia*.csv` naming —
+it models eliminating the Wage & Earnings Tax (not the property tax) and replacing it with a new
+land-only tax, at census tract granularity. See `docs/WAGE_TAX_SWAP_GUIDE.md` for the full
+methodology. Key gotchas found while building it:
+
+- **ACS table B19062, not B19061.** `B19062` is "Aggregate Wage or Salary Income for Households"
+  (wages only); `B19061` is "Aggregate Earnings" (wages + self-employment). Philadelphia's
+  self-employment income is captured by the separate Net Profits Tax, so `B19061` would overstate
+  the Wage Tax base.
+- **TIGERweb tract boundaries are `Tracts_Blocks/MapServer/4`** ("Census Tracts", polygon
+  geometry) — the direct sibling of the block-group Layer 1 already used in
+  `get_census_blockgroups_shapefile()`. Layer 8 in the same service (used elsewhere in
+  `census_utils.py` for block-group chunking) returns tract *numbers* only, not polygons — don't
+  reuse it for boundaries.
+- **A pure land-only tax reuses `model_split_rate_tax`, not a new solver.** Passing an all-zero
+  improvement-value column makes the existing closed-form solve collapse to exactly
+  `land_millage = target_revenue * 1000 / total_land_value` for *any* `land_improvement_ratio` —
+  an exact identity (the improvement term's revenue contribution is `0 * improvement_millage = 0`
+  regardless of ratio), not an approximation. `lvt.wage_tax_utils.model_land_only_tax` wraps this.
+- This notebook reads the shared `cities/philadelphia/data/parcels.gpq` cache read-only — it does
+  not build or rebuild it. Run `model.ipynb` first if the cache doesn't exist yet.
+
 ## Notebooks
 
 Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `.claude/skills/build-notebook.md`:
