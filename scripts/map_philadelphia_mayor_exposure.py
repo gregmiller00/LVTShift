@@ -76,7 +76,10 @@ def load_parker_vote_share() -> pd.DataFrame:
 
 def load_precinct_boundaries_with_vote_share() -> gpd.GeoDataFrame:
     gdf = gpd.read_file(ELECTIONS_DIR / "political_ward_divisions.geojson")
-    gdf["precinct_name"] = gdf["DIVISION_NUM"].str[:2] + "-" + gdf["SHORT_DIV_NUM"].str.zfill(2)
+    # Build ward-division name from DIVISION_NUM alone: SHORT_DIV_NUM disagrees with it
+    # for one polygon (OBJECTID 533, DIVISION_NUM '1301' vs SHORT_DIV_NUM '13'), which
+    # would mislabel precinct 13-01 as a duplicate 13-13
+    gdf["precinct_name"] = gdf["DIVISION_NUM"].str[:2] + "-" + gdf["DIVISION_NUM"].str[2:]
     vote_share = load_parker_vote_share()
     merged = gdf.merge(vote_share, left_on="precinct_name", right_on="PRECINCT NAME", how="left")
     return merged[["precinct_name", "parker_share", "geometry"]]
@@ -84,17 +87,23 @@ def load_precinct_boundaries_with_vote_share() -> gpd.GeoDataFrame:
 
 def compute_precinct_sfr_win_rate(precincts: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     parcels = gpd.read_parquet(DATA_DIR / "parcels.gpq")
+    # OPA source data carries 4 genuinely duplicated parcel numbers (14 rows); drop the
+    # extras on both sides so the merge stays 1:1 instead of inflating m:m
+    parcels = parcels.drop_duplicates(subset="parcel_number")
     parcels["parcel_id"] = parcels["parcel_number"].astype(str).str.lstrip("0")
     parcels.loc[parcels["parcel_id"] == "", "parcel_id"] = "0"
     parcels["parcel_id"] = parcels["parcel_id"].astype("Int64")
 
     model_df = pd.read_csv(MODEL_CSV)
+    model_df = model_df.drop_duplicates(subset="parcel_id")
     sfr = model_df[model_df["property_category"] == "Single Family Residential"][["parcel_id", "tax_change_pct"]]
 
     parcels_sfr = parcels.merge(sfr, on="parcel_id", how="inner")
-    parcels_sfr["centroid"] = parcels_sfr.geometry.centroid
+    # Compute centroids in a projected CRS (points barely move for parcel-sized polygons,
+    # but this avoids the geographic-CRS centroid warning and is correct by construction)
+    proj_centroids = parcels_sfr.geometry.to_crs("EPSG:2272").centroid
     cent = gpd.GeoDataFrame(
-        parcels_sfr[["parcel_id", "tax_change_pct", "centroid"]], geometry="centroid", crs=parcels_sfr.crs
+        parcels_sfr[["parcel_id", "tax_change_pct"]], geometry=proj_centroids, crs="EPSG:2272"
     ).to_crs(precincts.crs)
 
     joined = gpd.sjoin(cent, precincts, how="left", predicate="within")
