@@ -135,6 +135,48 @@ Report per district: parcel count, % taxable parcels with tax decrease, % SFR pa
 
 If district boundaries cannot be found after attempting all three sources, note "District boundaries not found — searched [sources attempted]. District-level breakdown not computed." Do not block the rest of the analysis.
 
+**Precinct-level electoral base computation (conditional — attempt for every city, especially valuable for at-large officials):**
+
+District membership is a fixed geographic container, not an electoral signal — it can't show whether an official's *actual base* (the precincts where they ran strongest) wins or loses under the model, and it doesn't exist at all for at-large officials (mayors, at-large council seats) who have no district to join against. Precinct-level vote share fills both gaps, but only when grounded in real returns.
+
+1. **Identify the dispositive election per official.** In one-party-dominant cities the primary, not the general, is the real contest for that seat — note which election is dispositive per official rather than assuming the general always applies.
+2. **Source actual precinct-level returns only — no proxy fallback.** Do not substitute standardized partisan-lean data (e.g., presidential precinct results) for an official's real electoral performance. Attempt these sources in order, stopping at the first success:
+   - City/county election board or clerk's office precinct-level canvass for the specific race
+   - State Secretary of State elections division precinct-level results file
+   - The OpenElections project (`github.com/openelections`) for normalized historical precinct returns
+   If none are found, note "Precinct-level returns not found — searched [sources attempted]. Precinct-level analysis not computed." and move on — do not block the rest of the analysis.
+3. **Source precinct boundaries separately, and check vintage before joining.** Precincts get redrawn or consolidated between elections; joining the wrong boundary vintage to a given election's returns silently misattributes votes to the wrong geography. Confirm the boundary vintage matches the election year of the returns. Boundary sources: county GIS/ArcGIS FeatureServer (same search pattern as the district boundaries above, via `get_feature_data_with_geometry`), or Census Bureau VTD (voting tabulation district) shapefiles as a boundaries-only source.
+4. **Run the spatial join and correlation** once returns and vintage-matched boundaries are both in hand:
+
+```python
+from scipy.stats import pearsonr
+from lvt.census_utils import match_to_census_blockgroups
+
+# Reuse the generic centroid-in-polygon join — precincts stand in for census_gdf
+joined = match_to_census_blockgroups(parcels, precincts)
+
+def precinct_stats(df):
+    sfr = df[df['property_category'] == 'Single Family Residential']
+    return pd.Series({
+        'n_parcels': len(df),
+        'pct_decreasing': (df['tax_change'] < 0).mean() * 100,
+        'pct_sfr_decreasing': (sfr['tax_change'] < 0).mean() * 100 if len(sfr) else float('nan'),
+        'median_sfr_change_pct': sfr['tax_change_pct'].median() if len(sfr) else float('nan'),
+    })
+
+precinct_table = joined.groupby('PRECINCT_COL').apply(precinct_stats).reset_index()
+precinct_table = precinct_table.merge(vote_share_df, on='PRECINCT_COL', how='left')
+
+r_all, _ = pearsonr(precinct_table['vote_share_pct'], precinct_table['pct_decreasing'])
+r_sfr, _ = pearsonr(precinct_table['vote_share_pct'], precinct_table['pct_sfr_decreasing'])
+
+# Base-coalition stat: the official's electoral stronghold, not just their district
+stronghold = precinct_table[precinct_table['vote_share_pct'] >= precinct_table['vote_share_pct'].quantile(0.75)]
+base_sfr_win_rate = (stronghold['pct_sfr_decreasing'] > 50).mean() * 100
+```
+
+Report, per official/race: the correlation coefficient between vote share and both `pct_decreasing` and `pct_sfr_decreasing`, and the **base-coalition SFR win rate** — the SFR win rate specifically within the official's top-quartile highest-vote-share precincts (their electoral stronghold). This is the number that catches "safe seat is actually a losing pocket for the officeholder's own base," which the district-level `sfr_majority_wins` flag cannot see because it averages over the whole district rather than isolating where the official's votes actually came from.
+
 ---
 
 ### Layer 1 — Identify political actors
@@ -152,6 +194,7 @@ Using web search, Ballotpedia, and the city's official website:
    - Electoral base (district description, owner-vs-renter-heavy neighborhoods if known)
    - Whether their seat is currently competitive or safe
    - **District winner flag** (from Layer 0 district computation, if available): whether >50% of SFR parcels in their district see a tax decrease. Include this in the officials table as a "District wins?" column. If district data is unavailable, leave as "N/A."
+   - **Base coalition flag** (from Layer 0 precinct computation, if available): whether >50% of SFR parcels in the official's top-quartile highest-vote-share precincts see a tax decrease. Include this in the officials table as a "Base coalition wins?" column. N/A (no local precinct-level returns found) is an expected, acceptable value — not a failure — same posture as "District wins?".
 
 **Prioritization rule:** Research depth follows vote importance. The mayor (or council president) who sets the agenda gets the most thorough research. A member without a committee role gets standard research. State legislators get standard research unless they chair the relevant committee.
 
@@ -267,6 +310,16 @@ Note the **minimum winning coalition**: how many districts have SFR majority win
 If district data is unavailable, write "District-level breakdown not computed — [reason from Layer 0]."
 
 Interpret each number in political terms, not just as a fact. "83% of single-family parcels see a tax decrease" → "The median homeowner constituency is a net winner — this is a defensible vote for most district-level council members."
+
+**Precinct-level vote-share correlation (from Layer 0 precinct computation, if available):**
+
+| Official / race | Correlation (vote share vs. % all ↓) | Correlation (vote share vs. % SFR ↓) | Base-coalition SFR win rate | Interpretation |
+|---|---|---|---|---|
+| [Name] | [r = X.XX] | [r = X.XX] | [X%] | [e.g., "positive correlation — the councilmember's strongest precincts are also net winners, safe territory to lead on this"] |
+
+If precinct data is unavailable, write "Precinct-level vote-share correlation not computed — [reason from Layer 0, sources attempted]."
+
+A positive correlation means an official's electoral stronghold overlaps with the reform's winners — favorable ground to lead publicly. A negative or near-zero correlation, or a base-coalition SFR win rate well below the district- or city-wide rate, means the official's own base is disproportionately exposed to losses even if their district looks fine on average — a specific reason for caution that the district-level table alone would miss.
 
 ---
 
@@ -387,11 +440,13 @@ One paragraph: viability tier rationale. Top 2 risks. Top 1 opportunity. What wo
   - Key stats: [% decreasing, SFR median, income quintile direction]
 
 ## 3. Political actors
-| Name | Role | Term ends | Electoral base | District wins? | Score | Confidence | Key evidence |
-|---|---|---|---|---|---|---|---|
-| [name] | [role] | [date] | [description] | [Yes / No / N/A] | [+2 to -2] | [H/M/L] | [quote or vote, with link] |
+| Name | Role | Term ends | Electoral base | District wins? | Base coalition wins? | Score | Confidence | Key evidence |
+|---|---|---|---|---|---|---|---|---|
+| [name] | [role] | [date] | [description] | [Yes / No / N/A] | [Yes / No / N/A] | [+2 to -2] | [H/M/L] | [quote or vote, with link] |
 
 "District wins?" = Yes if >50% of SFR parcels in this official's district see a tax decrease under the model; No if not; N/A if district data unavailable.
+
+"Base coalition wins?" = Yes if >50% of SFR parcels in this official's top-quartile highest-vote-share precincts see a tax decrease under the model; No if not; N/A if no local precinct-level returns were found (an expected, acceptable value, not a failure).
 
 [Repeat for each official. If state action required, include a separate sub-table for state legislators.]
 
@@ -427,6 +482,13 @@ One paragraph: viability tier rationale. Top 2 risks. Top 1 opportunity. What wo
 | [1] | [Name] | [X%] | [X%] | [X%] | Yes / No |
 
 **Minimum winning coalition analysis:** [N] of [M] districts have SFR majority wins. Votes needed to pass: [N]. [Interpretation: e.g., "A latent homeowner-relief majority exists across 6 of 9 districts — more than the 5 votes needed for passage."]
+
+### Precinct-level vote-share correlation
+[Populated from Layer 0 precinct computation, or "not computed — [reason, sources attempted]".]
+
+| Official / race | Correlation (vote share vs. % all ↓) | Correlation (vote share vs. % SFR ↓) | Base-coalition SFR win rate | Interpretation |
+|---|---|---|---|---|
+| [Name] | [r = X.XX] | [r = X.XX] | [X%] | [interpretation] |
 
 ## 5. Political environment
 ### Issue salience
@@ -516,7 +578,7 @@ The brief itself uses the scoring taxonomy — it is the working document. Chat 
 
 ## Quality gates
 
-A brief passes when all four gates are green. Re-run any failing gate before delivering.
+A brief passes when all six gates are green. Re-run any failing gate before delivering.
 
 ### Gate 1 — Citation density
 Every official with a non-zero position score (±1 or ±2) has at least one primary source citation: a direct quote with outlet/date, a voting record link, or a questionnaire response link.
@@ -548,6 +610,12 @@ Section 4 includes a district-level breakdown, OR explicitly states why it could
 **Pass:** Section 4 has a populated district table OR a "not computed" explanation naming the sources attempted.
 **Fail:** Section 4 has no district subsection at all.
 
+### Gate 6 — Precinct analysis attempted
+Section 4 includes a precinct-level vote-share correlation subsection, OR explicitly states why it could not be computed (no local precinct-level returns found, boundary vintage mismatch, at-large seat with no contested race, etc.). Silence is not acceptable — but "not computed" is an expected, frequent, and acceptable outcome given that real local-race precinct returns are often unavailable.
+
+**Pass:** Section 4 has a populated precinct table OR a "not computed" explanation naming the sources attempted.
+**Fail:** Section 4 has no precinct subsection at all.
+
 ---
 
 ## Common failure modes
@@ -563,6 +631,8 @@ Section 4 includes a district-level breakdown, OR explicitly states why it could
 | Generic national framing | Using national LVT polling averages when city-specific dynamics differ | Always note when you're relying on national polling data and flag that city-level data would be more reliable |
 | Stale officials | Researching or scoring officials who are no longer in office — names sourced from hearing transcripts, prior analyses, or stale web results | Run the current-service verification step (Layer 1) before any research. Confirm every official against the governing body's own current member list. Mark departed officials as "departed — not researched." |
 | Op-ed as institutional endorsement | Citing a contributor op-ed as evidence of a publication's or organization's position on LVT (e.g., "The Inquirer supports LVT" based on a single staff or freelance piece) | Apply the signal quality hierarchy in Layer 2. An op-ed establishes only the contributor's individual view. Only attribute a position to an institution when you have explicit institutional evidence: editorial board statement, org press release, formal endorsement. |
+| Precinct/boundary vintage mismatch | Joining current-year precinct boundaries to an older election's returns (or vice versa) after redistricting or precinct consolidation, silently misattributing votes to the wrong geography | Confirm the precinct boundary vintage matches the election year of the returns before joining (Layer 0). If vintages can't be reconciled, treat the precinct analysis as not computed rather than joining mismatched data. |
+| Proxy vote data passed off as real | Substituting standardized partisan-lean data (e.g., presidential precinct results) for an official's actual local-race performance without flagging it | Precinct-level vote share must come from actual local-race returns (Layer 0). If real returns aren't found, report "not computed" — do not silently substitute a proxy. |
 
 ---
 
