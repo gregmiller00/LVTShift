@@ -1,62 +1,58 @@
-# Audit: Philadelphia LVT analyses and the "Mayor's base is safe" claim
+# Deep audit: the chain from OPA data to "LVT is politically palatable for Mayor Parker"
 
-**Date:** 2026-07-18
-**Scope:** End-to-end audit of the Philadelphia model exports, the 2023 election-data pipeline, the mayor-exposure map/scatter scripts (`scripts/map_philadelphia_mayor_exposure.py`, `scripts/scatter_philadelphia_mayor_exposure.py`), and the two subagent-authored political briefs (`analysis/political/philadelphia_lycd{,_post_abatement}.md`).
-**Claim under audit:** Mayor Parker's electoral base (top-quartile 2023-primary vote-share precincts) is not disproportionately exposed to LVT reform losses under the LYCD models.
+**Date:** 2026-07-18 (supersedes the same-day implementation audit; implementation findings carried forward)
+**Scope:** Every assumption, logic step, and implementation detail in the chain from raw parcel data to the claim that Mayor Parker's electoral base is not disproportionately exposed to LVT reform losses. Sources audited: the four model exports, `cities/philadelphia/model_lycd.ipynb` construction, the 2023 election pipeline, `scripts/map_philadelphia_mayor_exposure.py` / `scatter_…`, and the two political briefs (`philadelphia_lycd{,_post_abatement}.md`).
 
-## Verdict
+## Bottom line
 
-**The headline claim survives the audit, with one required qualification.** Every headline number reproduces independently; the two bugs found are quantified below and neither moves any reported figure at the displayed precision. The required qualification: the "base is safe" result is established for **homeowners (SFR, and residential broadly)** — on an **all-taxable-parcel** basis her stronghold *is* mildly more exposed than the city (r = −0.166, 67% vs 69% parcel-weighted win rate), consistent with commercial-corridor precincts inside her coalition. Messaging built on this analysis should say "her homeowner base," not "her base," or carry the commercial caveat.
+**The claim survives, in a sharpened form.** The defensible statement is:
 
-## Layer A — Model exports
+> *A solid majority of the homeowners in Mayor Parker's electoral base win under the modeled reform, under every land-value structure tested (OPA splits, LYCD zone-price, FHFA market-calibrated tract shares); where her base's homeowners lose, the losses are shallow (median ≈ $130/yr, 90th percentile ≈ $500/yr — an order of magnitude smaller than losses elsewhere in the city); and the large dollar losers inside her base are overwhelmingly vacant-land holders, the policy's intended target.*
 
-- **Reproducibility: PASS.** All four notebooks re-executed headlessly (0 errors) and regenerated CSVs are **byte-identical** to the versions on disk. No stale-export drift.
-- **Revenue neutrality: PASS.** All four exports: current vs new revenue gap 0.000%; land/improvement millage ratio exactly 4.000.
-- **Documented values: PASS** with one stale-memory note: OPA pre-abatement millages are 29.08/7.27 (project memory said 28.80/7.20 — a value from before the abated-parcel building-value imputation change; the memory note, not the model, is stale). LYCD 23.64/5.91 and both post-abatement pairs match documentation exactly.
-- **Known join traps: PASS.** No index-based joins in the new scripts; leading-zero stripping produces zero true collisions.
-- **Finding A-1 (immaterial): duplicate parcels in source.** 4 parcel numbers appear 2–4× each (14 rows) in both `parcels.gpq` and every export — genuine OPA source duplicates, not a join artifact. The m:m merge in the exposure scripts inflates the joined table by 38 rows out of ~580K (0.007%). No visible effect at reported precision.
+The claims that do **not** survive unqualified:
+1. **"Her base tracks the citywide average exactly" was partly an artifact of investor-owned homes.** Restricting to owner-occupied homes (the actual voters), her base trails the citywide homeowner win rate by ~4pp under LYCD at 4:1 (71.2% vs 75.3%), significant but modest (r = −0.106). The flat headline correlation was propped up by investor-owned SFR in her stronghold winning at 87.6%.
+2. **"Her base is safe" must be scoped to homeowners.** On an all-taxable-parcel basis her stronghold is mildly more exposed (r = −0.166; 67% vs 69%).
+3. **The result is ratio- and land-share-sensitive in a consistent direction:** her base's relative exposure grows as the split steepens (2:1 → 4:1) and as the assumed land share rises (15% → 30%), but never drops below majority-winner status anywhere in the tested space.
 
-## Layer B — Election data (2023 primary returns + ward-division boundaries)
+## Per-link verdict table
 
-- **External anchor: PASS (exact).** Computed citywide Parker share = 32.6%, matching the official 2023 Democratic primary result.
-- **Denominator: PASS.** The `MAYOR`+`DEM` column filter catches exactly the 9 Democratic candidates + Write-in; no totals column contamination. (Note: any *count*-level sum over the raw sheet must exclude the `COUNTY TOTALS` row — shares are unaffected because it scales numerator and denominator equally.)
-- **Geographic spot-checks: PASS.** Ward 66 → Far Northeast, 27 → University City, 39 → South Philly, 50 → West Oak Lane (Parker's home ward) — all centroids land where they should.
-- **Returns table structure: PASS.** 1,704 unique non-null precinct rows (1,703 precincts + `COUNTY TOTALS`); the ~3,400 extra sheet rows are empty padding; no duplicate precinct blocks.
-- **Finding B-1 (real bug, immaterial): precinct 13-01 mislabeled.** Boundary polygon OBJECTID 533 has internally inconsistent source fields (`DIVISION_NUM='1301'` but `SHORT_DIV_NUM='13'`). The scripts' name construction trusts `SHORT_DIV_NUM`, so the 13-01 polygon is labeled as a duplicate "13-13": the real 13-01 returns row never joins, and 13-01's parcels are pooled into 13-13 with 13-13's vote share. **Impact quantified: rebuilding the entire pipeline with the corrected construction (`DIVISION_NUM[:2] + '-' + DIVISION_NUM[2:]`) leaves every headline number unchanged to 3 decimals** (LYCD r = 0.007, OPA r = −0.332, stronghold medians 80.4%/66.9%). Recommended fix for the scripts regardless.
+Verdicts: **VERIFIED** (checked, correct) · **ROBUST** (conclusion stable under perturbation) · **WEAKENED** (claim survives but smaller/qualified) · **ASSUMPTION** (untestable from within; flagged as scope condition).
 
-## Layer C — Spatial joins
+| # | Link | Verdict | Key evidence |
+|---|------|---------|--------------|
+| 1 | OPA assessed values as ground truth | ASSUMPTION (adjudicated) | OPA and LYCD disagree on the sign of her base's exposure (r = −0.33 vs ≈0). Her strongholds are the epicenter of OPA's 20%-default punt (r = +0.52 with default share), but the OPA gradient survives controlling for it (partial r = −0.46): OPA's genuinely-assessed splits in her base carry high land shares; LYCD's market-price method disagrees. Neither is ground truth; present both. |
+| 2 | LYCD's flat 20% land share | ROBUST (relative claim) / WEAKENED (absolute) | (a) Band test 15–30%: all-SFR correlation stays flat (|r| ≤ 0.07 everywhere); owner-occ gradient deepens with share (−0.04 → −0.15) but stronghold homeowners stay majority-winners at every point (60–86%). Market-value-cap ambiguity immaterial (bounds nearly identical). (b) External: FHFA puts Philadelphia County SF land share at 25–29% (2012–22) — 20% is a modest underestimate; tract-level shares run 0.14–0.41, correlated +0.74 with value ([FHFA WP 19-01 data](https://www.fhfa.gov/research/papers/wp1901)). (c) FHFA-structured variant (tract share × taxable value): nearly all SFR citywide wins (96.6%), her strongholds do *better* than average (r = +0.22) — burden shifts to vacant land and Center City. First-pass version of this variant had a bug (applied shares to gross market value, silently deleting the homestead deduction); corrected version reported here. |
+| 3 | Lot-area chain (DOR → LYCD) | VERIFIED | 90.4% PIN-level DOR coverage; $/sqft tails sane (p50 $57, p99 $516, one parcel >$10k). Missing-area KNN imputation concentrates *outside* her base (2.6% of stronghold parcels vs 11.8% elsewhere) — cannot be driving her base's result. |
+| 4 | Levy scope (city+school 1.3998%) | ANALYTIC | Win rates and % changes are scope-invariant (uniform scaling); dollar magnitudes scale ×≈0.45 if the school share can't participate. The school district's share requires the same state enabling act — flag when quoting $ figures. |
+| 5 | 4:1 ratio choice | ROBUST (gradient documented) | Owner-occ stronghold correlation: +0.02 (2:1) → −0.06 (3:1) → −0.11 (4:1); win rates 86% → 80% → 76%. Milder ratios are strictly safer for her base. Directly useful for the TJ conversation: if his model used a steeper ratio than 4:1, his worse result is partly explained. |
+| 6 | Revenue neutrality vs collections | ASSUMPTION | Model equates billed, not collected; ~5% delinquency gap concentrates in low-income (winning) areas, so collected-revenue neutrality would require slightly higher millages. Second-order. |
+| 7 | Exemption/abatement mechanics | VERIFIED (one distributional flag) | Homestead is embedded in `taxable_building`; abated parcels use `exempt_building` (fallback `market_value − taxable_land`). Correctly implemented. Flag: because homestead relief rides on the building side, the reform *dilutes* it — its value falls from ≈ $1,120/yr (80K × 13.998 mills) to ≈ $473/yr (80K × 5.91 mills). This is inside the reported win rates, but it is a real feature of split-rate worth stating openly. |
+| 8 | Current-tax validation | VERIFIED (carried) | City-levy cross-check gap +5% ≈ normal delinquency (documented in CLAUDE.md/explainers); all four exports re-executed to byte-identical CSVs. |
+| 9 | SFR parcel = homeowner voter | WEAKENED | 68.5% of SFR is owner-occupied (mailing-address proxy; 12-case spot-check looks clean — genuine absentee addresses). Stronghold investor share 33.5% vs 31.5% city. Owner-occupied-only: r = −0.106, stronghold 71.2% vs citywide 75.3%. The honest voter-level number is mildly negative, still >70% winners. |
+| 10 | Renters in her coalition | VERIFIED (proxy) + ASSUMPTION (incidence) | Her strongholds are *not* renter-heavier than the city (rental-ish parcel mix 29.6% vs 31.4%, r = −0.03). The claim that land tax isn't passed through to rents is standard theory but untestable here; flag whenever renters are invoked as beneficiaries. |
+| 11 | Magnitudes / loss aversion | VERIFIED (favorable) | Pre-abatement, owner-occupied stronghold: median winner −$203/yr; losers 29% shallow (median $130, p90 $502, p99 $2,191) vs rest-of-city losers (median $323, p90 $3,283, p99 $9,993). Post-abatement: stronghold median still a win (−$87); losers 41% but still shallow (median $169, p90 $536). No big-loss tail in her base in either scenario. |
+| 12 | Multi-parcel owners | VERIFIED (favorable) | Only 2.5% of stronghold owner-occupants also receive bills for a losing investment parcel, *below* the 4.5% citywide rate. |
+| 13 | Stronghold construct | ROBUST | Stable across 4 definitions (top-quartile share, ≥50% share, top-decile, top-quartile raw votes: 76–83%), parcel weighting, small-n filters, and turnout weighting (77.1% vs 75.4% citywide). |
+| 14 | 2023 primary vintage | ASSUMPTION (corroborated) | General-election base measure agrees (stronghold median 82.2% vs citywide 82.3%); primary and general shares correlate r = 0.63. Her 2027 coalition is unknowable; flag. |
+| 15 | "Northeast" / District 9 conflation | VERIFIED (reconciled) | D9's weakness is Olney/Lawncrest (wards 49: 60.3%, 17: 64.6%, 42: 65.4%), not her base: ward 50 (West Oak Lane, 71% Parker share) wins at 85.0%, ward 10 at 80.9%. Earlier session language lumping D9 into "the Northeast" conflated her home base with the genuinely weaker area; use D6/D10 + Olney-area wards when discussing TJ's Northeast concern. |
+| 16 | Who the in-base losers are | VERIFIED (favorable, with flags) | Top-50 dollar losers inside stronghold precincts: 38 vacant land + 2 improved-vacant (the policy target), 5 industrial, 3 commercial, 2 abated. Politically loud homeowner losses are absent; industrial/commercial single-parcel increases up to ≈$0.5–1.0M are named organized-opposition risks. |
+| 17 | Legal gate | ASSUMPTION (outermost) | All palatability claims are conditional on PA state enabling legislation that no sitting legislator currently sponsors (see the political briefs). |
+| 18 | Bottom-line reconciliation | — | See "Bottom line" above and "What to tell TJ" below. |
 
-- **Geographic-CRS centroid warning: PASS.** Recomputing all parcel centroids in EPSG:2272 (projected) changes no precinct assignment outcome at reported precision — identical r values and medians. The warning is cosmetic for this use (point-in-polygon on small parcels); fixing it is good hygiene.
-- **Dropped parcels: PASS.** 3 of ~580K parcels fall outside all precinct polygons (boundary slivers); no geographic clustering of consequence.
-- **Small-precinct sensitivity: PASS.** Stronghold median SFR win rate is 80.4% / 80.4% / 80.3% at minimum-n thresholds of 1 / 10 / 25. The map (no filter) and scatter (n≥10) are consistent.
+## What to tell TJ (supersedes earlier session formulations)
 
-## Layer D — Validity of the inference
+1. **The Northeast effect is real but concentrated and modest.** Under LYCD the genuinely weaker area is the Far Northeast plus Olney/Lawncrest (win rates 60–73%), not a monolithic "Northeast," and not the Mayor's own base wards (80–85%). Under the FHFA market-calibrated structure, even the Far Northeast is majority-winner.
+2. **The Mayor's personal political exposure is limited, stated carefully:** most of her base's *homeowners* win under every structure tested; their losses, where they occur, are shallow; and her base's large losers are vacant-land holders. The honest caveats: owner-occupied homes in her base trail the citywide win rate by ~4pp (LYCD 4:1); the city's own OPA splits would say her base is somewhat exposed; the claim does not extend to commercial parcels in her coalition.
+3. **Design levers matter in her favor:** a milder ratio (2:1) eliminates even the ~4pp owner-occupied gap; and if TJ's model used a steeper effective ratio or OPA's raw splits, both differences push toward his more pessimistic conclusion.
+4. **Two structural honesty points for any public claim:** the reform as modeled roughly halves the dollar value of the Homestead Exemption (rides on the building millage), and all dollar figures assume the school-district share participates — city-only action scales them by ≈0.45.
 
-- **D-1 Scope sensitivity (the required qualification).** LYCD pre-abatement, stronghold vs citywide:
-  | Scope | r (share vs win rate) | Stronghold win rate (parcel-wtd) | Citywide (parcel-wtd) |
-  |---|---|---|---|
-  | SFR only | +0.007 (n.s.) | 76.6% | 76.6% |
-  | All residential + mixed | +0.014 (n.s.) | 78.1% | 78.0% |
-  | All taxable | **−0.166 (p<0.001)** | 67.1% | 69.1% |
-  The homeowner claim is rock-solid; the all-parcel measure shows mild negative exposure (commercial corridors in her coalition). Two-thirds of all taxable parcels in her stronghold still win.
-- **D-2 Stronghold definition: robust.** Top-quartile share (80.4%), share ≥50% (80.1%), top-decile share (82.7%), top-quartile raw votes (75.8%) — all comfortably above 50%, all near the citywide 82.3% precinct median.
-- **D-3 Weighting: robust.** Parcel-weighted stronghold SFR win rate (76.6%) exactly matches citywide (76.6%).
-- **D-4 OPA-vs-LYCD divergence — adjudicated.** Why OPA says her base is exposed (r = −0.33) and LYCD says it isn't (r = 0.01):
-  1. Parker's strongholds are precisely where OPA defaults land ratios: correlation between her precinct vote share and the share of SFR parcels at OPA's 0.200 default is **r = +0.52**. Her Northwest base is the epicenter of OPA's assessment punt.
-  2. **The "LYCD flattens geography" concern is rejected**: cross-precinct variation in median land ratio is *higher* under LYCD (SD 0.076 vs 0.063), and win-rate dispersion is comparable (18.2pp vs 20.3pp). The flat LYCD correlation is not a mechanical artifact of the 20%-flat-share construction compressing variation.
-  3. However, the OPA gradient is **not purely the default-LR artifact**: controlling for the precinct default share, the negative OPA gradient persists and strengthens (partial r = −0.46). Where OPA assessors *did* assign real splits in her base neighborhoods, they assigned relatively high land shares; LYCD's market-price-times-lot-area method disagrees with those splits.
-  4. **Honest bottom line:** the sign of the Mayor's homeowner-base exposure depends on whose land-share estimates you believe — OPA's assessor-assigned parcel splits (45% defaulted citywide, most heavily in her base) or LYCD's zone-price-based construct. LYCD has the more principled market basis and is not artifactually flat; but the OPA result cannot be dismissed as *only* a data artifact. Any presentation should show both and explain the divergence rather than assert one as truth.
+## Corrections to earlier in-session claims
 
-## Layer E — Subagent-authored briefs
+- "Parker's stronghold ≈ citywide, full stop" → holds for all-SFR; **owner-occupied-only shows a real ~4pp deficit** (r = −0.106). Earlier statements lacked this cut.
+- The first FHFA-structured computation reported in-session (stronghold 43.8% owner-occ win rate) was **wrong** — it applied land shares to gross market value, deleting the homestead deduction from the reform side. Corrected variant: ~100% median win rates, favorable r = +0.22.
+- "District 9 is the Near Northeast and the weakest district" — true as stated but conflated with her base; ward-level decomposition (link 15) is the correct picture.
+- Project memory's OPA millages (28.80/7.20) were stale; current model: 29.08/7.27 (fixed in memory 2026-07-18).
 
-- **Quantitative reproduction: PASS (exact).** All 10 district-level %SFR-decreasing values in the LYCD pre-abatement brief reproduce to 0.1pp; all 10 districts confirmed SFR-majority-winning. Parker's correlations reproduce (brief +0.01/−0.16 vs audit +0.007/−0.166; post-abatement −0.021/−0.147 confirmed via shipped scripts). Base-coalition SFR win rate 96.2% reproduces exactly.
-- **Finding E-1 (framing risk): "base-coalition SFR win rate" definition.** The skill's metric is *the share of stronghold precincts that are majority-winning* (96.2%), not the share of stronghold homeowners who win (76.6%). Both are favorable, but the 96.2% figure invites misreading as the latter. Recommend the briefs (and any downstream messaging) state the definition inline.
-- **Citation spot-check: PASS.** Legistar file 210191 confirms Parker among the seven co-sponsors of the LVT hearing resolution, adopted, hearing held 4/30/2021 — as both briefs claim. (Broader officials-table citations not re-verified individually; the two independently-researched briefs agree with each other on all shared claims, which is itself corroborating evidence.)
+## Verification trail
 
-## Recommended follow-ups (not applied during audit)
-
-1. Fix the precinct-name construction in `map_philadelphia_mayor_exposure.py` to use `DIVISION_NUM` alone (Finding B-1) and compute centroids in EPSG:2272 (silences the warning; both verified no-op on results).
-2. De-duplicate the 4 doubled parcel numbers at export or join time (Finding A-1).
-3. Add the scope qualification ("homeowner base," commercial caveat) wherever the result is quoted — including the two political briefs' precinct sections (Finding D-1).
-4. Update the stale OPA millage figures in project memory (29.08/7.27).
-5. When presenting to TJ/the Mayor's office, present the OPA-vs-LYCD divergence explicitly (D-4) — the LYCD result is the better-founded estimate, but the honest framing is "under the city's own assessment splits her base looks mildly exposed; under a market-based revaluation it does not," which is also an argument for pairing any LVT proposal with assessment reform.
+All computations in this report were produced from: the four verified exports, `cities/philadelphia/data/parcels.gpq`, `opa_mailing.parquet` (owner-occupancy proxy), the 2023 City Commissioners returns + OpenDataPhilly division boundaries (13-01 fix applied), and the FHFA June-2024 land-price dataset (tract cross-section). The two compute batteries (land-share band, ratio band) are closed-form re-solves reproducing the notebook's `model_split_rate_tax` math; the 4:1/20% cell of the grid exactly reproduces the shipped headline numbers (r = 0.007, stronghold 80.4%, citywide 82.3%), anchoring the grid to the audited baseline.
