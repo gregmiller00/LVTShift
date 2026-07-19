@@ -1,0 +1,71 @@
+% beamer-theme.tex -- shared look for analysis-deck Beamer decks.
+% \input this from Deck.tex (after \documentclass). Everything keys off the seven
+% palette colors below: override them for your brand and the whole deck re-tones.
+% (The scaffolder can drop a brand palette in via --palette; otherwise this teal/amber
+%  default is a clean, neutral civic/analytical look.)
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xurl}              % break long URLs at safe characters
+\usepackage[htt]{hyphenat}    % allow breaks inside \texttt{} (file paths)
+\sloppy
+\emergencystretch=3em
+
+% ---- palette (override for brand) ----
+\definecolor{deckbg}{HTML}{0E3D49}     % dark-frame background (title / closing)
+\definecolor{deckfg}{HTML}{0E7C86}     % primary accent: titles, bars, big numbers
+\definecolor{deckfg2}{HTML}{2BB5A0}    % secondary accent
+\definecolor{deckhi}{HTML}{E0922B}     % highlight: opportunities / things to notice
+\definecolor{deckink}{HTML}{1A2B33}    % body text on light frames
+\definecolor{deckmuted}{HTML}{5B7682}  % captions / secondary text
+\definecolor{decktint}{HTML}{E8F2F3}   % card / panel fill
+
+\usetheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamercolor{normal text}{fg=deckink}
+\setbeamercolor{frametitle}{fg=deckbg}
+\setbeamerfont{frametitle}{series=\bfseries,size=\Large}
+\setbeamercolor{itemize item}{fg=deckfg}
+\setbeamercolor{itemize subitem}{fg=deckfg2}
+\setbeamercolor{itemize/enumerate body}{fg=deckink}
+\setbeamertemplate{itemize item}{\textbullet}
+\setbeamertemplate{itemize subitem}{\textendash}
+
+% Frame title: bold, colored, and deliberately WITHOUT an underline rule.
+% (A horizontal accent rule under the title is a hallmark of AI-generated slides;
+%  whitespace separates the title from content just as well.)
+\setbeamertemplate{frametitle}{\vskip0.6em\usebeamerfont{frametitle}%
+  \usebeamercolor[fg]{frametitle}\insertframetitle\par}
+
+% Optional running footer; comment out for a cleaner look.
+% \setbeamertemplate{footline}{\hfill{\tiny\color{deckmuted}\insertshorttitle\quad}\vskip2pt}
+
+% Big-text commands so a slide never carries a raw \fontsize number. This keeps the
+% no-hardcoded-numbers linter honest: the only bare numbers left in Deck.tex are layout
+% dimensions (which the linter skips), so anything it flags is a real result that belongs
+% in a macro. Tune the sizes here once and every slide follows.
+\newcommand{\deckeyebrow}[1]{{\small\bfseries #1}}                         % label above a title
+\newcommand{\decktitle}[1]{{\fontsize{32}{36}\selectfont\bfseries #1}}     % title-slide title
+\newcommand{\deckhead}[1]{{\fontsize{20}{24}\selectfont\bfseries #1}}      % closing / section head
+\newcommand{\deckbignum}[2][deckfg]{{\fontsize{26}{30}\selectfont\bfseries\color{#1} #2}}  % standalone stat
+
+% ---- KPI card style (used by deck_helpers.kpi_board) ----
+\tikzset{deckcard/.style={rounded corners=5pt, fill=decktint, minimum width=3.9cm,
+  minimum height=2.1cm, align=center, inner sep=4pt, text=deckink}}
+
+% ---- dark frame: for title and closing slides ----
+% Resets EVERY foreground colour so no element inherits dark-on-dark and vanishes.
+% (Beamer's itemize body colour will override a bare \color{white}, so set it here.)
+\newenvironment{darkframe}{%
+  \setbeamercolor{background canvas}{bg=deckbg}%
+  \setbeamercolor{normal text}{fg=white}%
+  \setbeamercolor{itemize/enumerate body}{fg=white}%
+  \setbeamercolor{itemize/enumerate subbody}{fg=white}%
+  \setbeamercolor{itemize item}{fg=deckfg2}%
+  \setbeamercolor{itemize subitem}{fg=deckfg2}%
+  \begin{frame}\usebeamercolor[fg]{normal text}\color{white}\raggedright}{%
+  \end{frame}}

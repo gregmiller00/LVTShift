@@ -1,0 +1,204 @@
+"""Helpers for reproducible reports: headline macros, formatters, table builders.
+
+This module is the toolkit for a project's ``generate_paper_assets.py`` — the single
+source of numerical content for the report. Copy it into ``paper/scripts/`` (the
+scaffolder does this) and import it from the generator.
+
+Design: formatters return PLAIN strings ("$467M", "71.1%", "2.42x"). The LaTeX writer
+escapes special characters at write time, and the JSON writer (for Markdown reports) keeps
+them plain. So one set of formatters serves both output formats.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+try:                       # pandas is optional; only the table helpers need it
+    import pandas as _pd
+except Exception:          # pragma: no cover
+    _pd = None
+
+
+# Progress and Poverty Institute brand palette (sampled from the PPI website).
+# Use these for figures in PPI reports so charts match the document theme.
+PPI_COLORS = {
+    "primary": "#475BB2",  # indigo
+    "dark":    "#2D3559",  # deep navy
+    "light":   "#579AF6",  # sky
+    "accent":  "#FF4F55",  # coral
+    "gray":    "#BDBDBD",  # neutral
+}
+
+
+# --------------------------------------------------------------------------- #
+# Formatters — return plain, display-ready strings
+# --------------------------------------------------------------------------- #
+def num(x, decimals=0):
+    """Thousands-separated number: 18211 -> '18,211'."""
+    return f"{float(x):,.{decimals}f}"
+
+def money(x, decimals=0):
+    """Dollar amount: 1234 -> '$1,234'."""
+    return f"${float(x):,.{decimals}f}"
+
+usd = money
+
+def usd_m(x, decimals=0):
+    """Dollars already expressed in millions: 466.6 -> '$467M'."""
+    return f"${float(x):,.{decimals}f}M"
+
+def usd_b(x, decimals=1):
+    """Dollars already expressed in billions: 1.7 -> '$1.7B'."""
+    return f"${float(x):,.{decimals}f}B"
+
+def pct(x, decimals=1):
+    """Percentage (x is already in percent): 71.1 -> '71.1%'."""
+    return f"{float(x):.{decimals}f}%"
+
+def ratio(x, decimals=2):
+    """Multiplier: 2.42 -> '2.42x'."""
+    return f"{float(x):.{decimals}f}x"
+
+def text(s):
+    """Passthrough for arbitrary strings (escaped at LaTeX write time)."""
+    return str(s)
+
+
+# --------------------------------------------------------------------------- #
+# LaTeX escaping
+# --------------------------------------------------------------------------- #
+_LATEX_SPECIAL = {
+    "\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$",
+    "#": r"\#", "_": r"\_", "{": r"\{", "}": r"\}",
+    "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
+}
+
+def latex_escape(s) -> str:
+    return "".join(_LATEX_SPECIAL.get(ch, ch) for ch in str(s))
+
+
+_NAME_RE = re.compile(r"^[A-Za-z]+$")
+
+def _check_macro_name(name: str, what: str) -> None:
+    # LaTeX \newcommand names are letters only (catcode 11). Digits/underscores
+    # silently break the macro, so fail loudly with a clear message.
+    if not _NAME_RE.match(name):
+        raise ValueError(
+            f"{what} {name!r} must be letters only (no digits/underscores/spaces) — "
+            f"LaTeX macro names cannot contain them. E.g. use 'Mdbrt' not 'MD355'."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Headlines: register a metric -> emit a \providecommand macro
+# --------------------------------------------------------------------------- #
+class Headlines:
+    """Collect headline numbers and write them as LaTeX macros and/or JSON.
+
+    Example::
+
+        H = Headlines(prefix="Mdbrt", out_path=TABLES / "headlines.tex")
+        H.add("CordonParcels", 18211, num)        # \\MdbrtCordonParcels -> 18,211
+        H.add("CordonGapM", 466.6, usd_m)         # -> $467M
+        H.add("VacantSaleRatio", 3.31, ratio)     # -> 3.31x
+        H.write()                                 # writes the .tex
+        H.to_json(OUT / "values.json")            # plain values for a Markdown report
+    """
+
+    def __init__(self, prefix: str, out_path):
+        _check_macro_name(prefix, "prefix")
+        self.prefix = prefix
+        self.out_path = Path(out_path)
+        self._vals: dict[str, str] = {}
+
+    def add(self, name: str, value, fmt=None, raw: bool = False):
+        """Register one macro. ``fmt`` is a formatter (e.g. ``usd_m``); ``raw`` skips
+        LaTeX escaping at write time (use only when value is intentional LaTeX)."""
+        _check_macro_name(name, "macro name")
+        if name in self._vals:
+            raise ValueError(f"duplicate headline macro {name!r}")
+        sval = fmt(value) if fmt is not None else (value if isinstance(value, str) else str(value))
+        self._vals[name] = sval
+        if raw:
+            self._raw = getattr(self, "_raw", set())
+            self._raw.add(name)
+        return self
+
+    def write(self):
+        """Write the LaTeX macro file (escapes values)."""
+        raw = getattr(self, "_raw", set())
+        lines = [
+            f"% {self.out_path.name} -- AUTO-GENERATED by the report generator.",
+            "% Do NOT edit by hand. Re-run the generator after any data change.",
+            "%",
+        ]
+        for name, val in self._vals.items():
+            v = val if name in raw else latex_escape(val)
+            lines.append(f"\\providecommand{{\\{self.prefix}{name}}}{{{v}}}")
+        self.out_path.parent.mkdir(parents=True, exist_ok=True)
+        self.out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return self.out_path
+
+    def to_json(self, path):
+        """Write plain (unescaped) values keyed by snake_case name, for Markdown reports."""
+        def snake(s):
+            return re.sub(r"(?<!^)(?=[A-Z])", "_", s).lower()
+        data = {snake(k): v for k, v in self._vals.items()}
+        Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return path
+
+
+# --------------------------------------------------------------------------- #
+# Tables
+# --------------------------------------------------------------------------- #
+def latex_table(df, col_format=None, index=False, escape=True, header=True) -> str:
+    """Return a booktabs ``tabular``/``tabularx`` fragment (no float wrapper).
+
+    Wrap the result in a ``table`` float (with caption/label) in Report.tex via
+    ``\\input``. If ``col_format`` contains 'X', a ``tabularx{\\linewidth}`` is used so a
+    wide text column absorbs slack and the table can't overflow the margin.
+    """
+    if _pd is None:
+        raise RuntimeError("latex_table requires pandas")
+    cols = ([df.index.name or ""] + list(df.columns)) if index else list(df.columns)
+    ncol = len(cols)
+    if col_format is None:
+        col_format = "l" + "r" * (ncol - 1)
+    spec = col_format.replace(" ", "")
+    esc = latex_escape if escape else (lambda s: str(s))
+
+    body = []
+    for _, row in (df.reset_index() if index else df).iterrows():
+        cells = [esc(row[c]) if c in row else esc(row.iloc[i]) for i, c in enumerate(cols)]
+        body.append(" & ".join(cells) + r" \\")
+
+    head = (" & ".join(esc(c) for c in cols) + r" \\" + "\n\\midrule\n") if header else ""
+    if "X" in spec or "x".upper() in [c for c in spec if c == "X"]:
+        open_env = f"\\begin{{tabularx}}{{\\linewidth}}{{@{{}} {spec} @{{}}}}"
+        close_env = r"\end{tabularx}"
+    else:
+        open_env = f"\\begin{{tabular}}{{@{{}} {spec} @{{}}}}"
+        close_env = r"\end{tabular}"
+    return "\n".join([open_env, r"\toprule", head + "\n".join(body), r"\bottomrule", close_env]) + "\n"
+
+
+def save_table(path, df, **kwargs):
+    """Write a generated LaTeX table fragment to ``path``."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(latex_table(df, **kwargs), encoding="utf-8")
+    return path
+
+
+def md_table(df, index=False) -> str:
+    """Return a GitHub-flavored Markdown table string."""
+    if _pd is None:
+        raise RuntimeError("md_table requires pandas")
+    d = df.reset_index() if index else df
+    cols = list(d.columns)
+    out = ["| " + " | ".join(str(c) for c in cols) + " |",
+           "| " + " | ".join("---" for _ in cols) + " |"]
+    for _, row in d.iterrows():
+        out.append("| " + " | ".join(str(row[c]) for c in cols) + " |")
+    return "\n".join(out) + "\n"
