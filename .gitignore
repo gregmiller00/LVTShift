@@ -117,6 +117,7 @@ data/
 cities/*/data/
 analysis/data/
 analysis/reports/
+analysis/maps/
 
 # TODO: analysis/ownership/ (Philadelphia ownership-concentration scripts, added 2026-07-03)
 # is untracked but not yet ignored here. Decide: add an ignore rule to match the other
@@ -127,6 +128,7 @@ analysis/reports/
 *.xlsx
 *.xls
 *.parquet
+*.pmtiles
 *.json
 *.geojson
 *.shp

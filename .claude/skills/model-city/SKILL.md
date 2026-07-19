@@ -111,6 +111,23 @@ out_df = save_standard_export(
 # Standard report — 7 PNGs in analysis/reports/<city>/
 from lvt.viz import create_city_report
 create_city_report(out_df, CITY_NAME, show=False)
+
+# Parcel-map export — GeoParquet + self-contained interactive HTML map (see build-notebook.md
+# for the header constants PARCEL_ID_COL / OWNER_NAME_COL / OWNER_ADDRESS_COL / PARCEL_URL_TEMPLATE).
+from lvt.parcel_map import save_parcel_map_export, create_parcel_map
+map_gdf = save_parcel_map_export(
+    gdf=gdf,
+    city=CITY_NAME,
+    output_path=f'../../analysis/maps/{CITY_NAME}.parquet',
+    model_type=MODEL_TYPE,
+    land_millage=land_millage,
+    improvement_millage=improvement_millage,
+    parcel_id_col=PARCEL_ID_COL,
+    parcel_url_template=PARCEL_URL_TEMPLATE,
+    owner_name_col=OWNER_NAME_COL,
+    owner_address_col=OWNER_ADDRESS_COL,
+)
+create_parcel_map(map_gdf, CITY_NAME)
 print("Done.")
 ```
 
@@ -142,6 +159,25 @@ is not a finding — it's a bug.
 
 Fully-exempt parcels are held out of the solver and **excluded from the export and report charts**
 (they carry no signal); report them by count, not as an "Exempt" category.
+
+---
+
+### Step 5b — Show the user the interactive map (the headline deliverable)
+
+The `create_parcel_map` call in Section 7 writes `analysis/reports/<city>/parcel_map.html` — a
+color-coded, clickable map of every parcel (green = pays less, red = pays more; click a parcel for
+its values and county-record link; charts gallery at the bottom). This is the **one output a
+non-technical user can actually see and explore**, so **always surface it in chat when the pipeline
+finishes**, as the lead of your wrap-up:
+
+- **Self-contained cities** (below the tile threshold): give a clickable link to the file —
+  `[Open the <City> parcel map](analysis/reports/<city>/parcel_map.html)` — and note it opens in any
+  browser (double-click or the link).
+- **Large / tiled cities** (`create_parcel_map` printed `serve over http` because it built PMTiles):
+  the viewer needs a range-capable server. Tell the user: run `python3 scripts/serve_maps.py` from the
+  repo root, then open `http://localhost:8000/analysis/reports/<city>/parcel_map.html`.
+
+Say one line about what it shows. Lead with this — it's the thing the user came for.
 
 ---
 

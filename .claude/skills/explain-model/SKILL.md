@@ -261,3 +261,4 @@ especially any limitation that changes how the results should be read.
 - [ ] Land-ratio uniformity probe run (deep) or explicitly skipped (fallback).
 - [ ] Limitations ranked, collapsed-signal artifacts first.
 - [ ] Written to `analysis/explainers/<city>.md`; path reported; not committed.
+- [ ] If `analysis/reports/<city>/parcel_map.html` exists, linked it in the chat wrap-up as the visual companion (`[Open the <City> parcel map](analysis/reports/<city>/parcel_map.html)`; for a tiled city, note `python3 scripts/serve_maps.py`).
